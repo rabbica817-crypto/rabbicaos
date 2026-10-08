@@ -96,6 +96,34 @@ sudo ./build.sh iso
 
 > ⚠️ 首次 `lb build` 约需 1-2 小时（含 Quickshell+KOS 编译），属正常现象；构建日志在 ISO 内 `/usr/share/doc/rabbicaos/build.log` 可查。
 
+## 路线 C：GitHub Actions 云端构建（无需本地设备）
+
+仓库内置 `.github/workflows/build-iso.yml`，两种触发方式：
+
+| 方式 | 操作 | 产出 |
+|---|---|---|
+| **手动触发** | GitHub 仓库页 → Actions → "Build RabbicaOS ISO" → Run workflow | Artifact: `rabbicaos-iso`（保留 14 天） |
+| **标签发布** | `git tag rbc-v1.0 && git push origin rbc-v1.0` | 自动创建 GitHub Release，附 ISO + sha256 |
+
+### 首次推送步骤
+
+```bash
+cd rabbicaos
+gh auth login                    # 或配置 SSH key 后 git remote add
+gh repo create rabbicaos --public --source=. --push
+# 推完到 Actions 页手动 Run workflow 即可
+```
+
+### CI 构建要点（已内置处理）
+
+| 环节 | 处理 |
+|---|---|
+| 磁盘空间 | runner 仅 ~14GB 可用，workflow 先清理 Android SDK/dotnet/ghc 腾出 ~25GB |
+| 镜像源 | CI 在海外自动用 deb.debian.org（本地构建默认清华 TUNA，`RBC_MIRROR` 可覆盖） |
+| 构建加速 | actions/cache 缓存 debootstrap/apt 包（二次构建提速约 40 分钟） |
+| 失败排查 | 构建失败自动打印 chroot 内 KOS 编译日志 |
+| 耗时 | 首次约 90-150 分钟；job 上限 350 分钟 |
+
 ## 故障排查
 
 | 症状 | 处理 |
