@@ -35,6 +35,20 @@
 #  - 其余依据沿用 v1: Quickshell 源 git.outfoxxed.me v0.3.0 (KOS README 要求
 #    0.3.x); kosctl install 部署到用户家目录 + systemd 用户单元 → 必须以 live
 #    用户身份运行; SYSTEMD_OFFLINE=1 为 systemctl 官方离线模式 (systemctl(1) man)。
+# v4 修订 (CI Run7 复盘 2026-10-08, 失败于 8/9 的 install apps 收尾):
+#  - 根因: tools/install-apps.sh 为"运行中系统"设计, 安装完成后立即做运行时
+#    操作 —— systemctl --user enable --now kos-data.service (41 行) 在 chroot
+#    中必败 ("--now cannot be used when systemd is not running ... refusing",
+#    SYSTEMD_OFFLINE=1 只能跳过 daemon-reload, 对 --now/is-active 无效, Run7
+#    日志实证); 后续还有 restart (42 行)、busctl ReloadConfig (70 行) 两个
+#    无兜底运行时调用, 以及 verify-apps-install.sh:46 的 is-active —— 全是雷。
+#  - 对照: kosctl install 主路径 (kosctl:845-859) 构建期友好 —— 注释明说
+#    "registers the units for the next session ... leaves the running session
+#    alone", 只 enable 不带 --now, 故前两个 install 通过。
+#  - 修复 (补丁 C/D): enable 保留 (写自启动链接, live 登录后 user manager 按
+#    链接拉起 kos-data.service, 语义正确); restart/busctl/verify 的 is-active
+#    为纯运行时动作, chroot 构建期无意义 → 兜底/注释。四条 sed 已本地 dash
+#    (sh -n) 验证语法, 行变换 grep 实证。
 # ============================================================================
 set -e
 
@@ -98,12 +112,34 @@ step "4/9 克隆 NextKde (上游 main)" \
 #   缺失) → ninja 报 "missing and no known rule"。KOS 全仓无
 #   import Quickshell.Wayland._BackgroundEffect (grep 实证; KOS 视觉由自带
 #   kwin/glass-effect 实现) → 删除该模块构建无损。
-step "5/9 trixie 兼容补丁 (GuiPrivate + background_effect)" \
-  sh -c 'sed -i "s/COMPONENTS Core Gui GuiPrivate Qml Quick WaylandClient/COMPONENTS Core Gui Qml Quick WaylandClient/" \
-    /opt/rabbica-build/NextKde/shell/native/surface-shape/CMakeLists.txt \
-  && sed -i -e "/^add_subdirectory(background_effect)$/d" \
-            -e "/^list(APPEND WAYLAND_MODULES Quickshell.Wayland._BackgroundEffect)$/d" \
-    /opt/rabbica-build/quickshell/src/wayland/CMakeLists.txt'
+# 补丁 C/D (chroot-safe systemd, v4): install-apps.sh 与 verify-apps-install.sh
+#   的收尾含运行时 systemd/D-Bus 调用, chroot 中无 user manager 必败 (Run7 实证):
+#   C1: enable --now → enable (保留自启动链接注册; live 登录后 user manager
+#       按 enable 链接拉起 kos-data.service, 语义不变)
+#   C2: restart kos-data.service → 加 || true (运行时动作, 构建期无意义)
+#   C3: busctl ReloadConfig → 加 || true (跨行命令末行兜底, dbus-broker 缓存
+#       刷新是运行时概念)
+#   D1: verify 的 is-active 行注释化 (需连运行中 manager; is-enabled 保留,
+#       纯文件操作可验证 enable 链接已写入)
+#   全部行变换与 dash 语法已本地验证 (sh -n + grep 实证, 见文件头 v4 注)
+# 注意: 补丁用函数定义而非 sh -c 包装 —— sed 表达式含 $/&/#, 函数体单引号
+#   无嵌套转义问题 (sh -c 双引号层会把 $# 展开为位置参数个数, 引号地狱)
+patch_trixie() {
+    sed -i 's/COMPONENTS Core Gui GuiPrivate Qml Quick WaylandClient/COMPONENTS Core Gui Qml Quick WaylandClient/' \
+        /opt/rabbica-build/NextKde/shell/native/surface-shape/CMakeLists.txt
+    sed -i -e '/^add_subdirectory(background_effect)$/d' \
+           -e '/^list(APPEND WAYLAND_MODULES Quickshell.Wayland._BackgroundEffect)$/d' \
+        /opt/rabbica-build/quickshell/src/wayland/CMakeLists.txt
+    sed -i \
+        -e 's#^systemctl --user enable --now kos-data\.service$#systemctl --user enable kos-data.service#' \
+        -e 's#^systemctl --user restart kos-data\.service$#& || true#' \
+        -e 's#^    org\.freedesktop\.DBus ReloadConfig >/dev/null$#& || true#' \
+        /opt/rabbica-build/NextKde/tools/install-apps.sh
+    sed -i \
+        's@^systemctl --user is-active kos-data.service >/dev/null || failed=1$@# is-active needs a live user manager (chroot build has none); is-enabled above already verified the enable link@' \
+        /opt/rabbica-build/NextKde/tools/verify-apps-install.sh
+}
+step "5/9 trixie 兼容补丁 (GuiPrivate + background_effect + chroot-safe systemd)" patch_trixie
 
 # ---- 5. 编译安装 Quickshell (CRASH_HANDLER=OFF 依据见文件头) ----
 step "6/9 CMake configure quickshell" \
