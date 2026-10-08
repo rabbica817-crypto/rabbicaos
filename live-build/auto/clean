@@ -1,5 +1,35 @@
 #!/bin/sh
 # 重置 live-build 构建目录 (Debian Live Manual: auto/clean 惯例)
-lb clean noauto "${@}"
+#
+# 【2026-10-08 修复 · 缓存失效根因】原实现无条件 `rm -rf .build/`, 而 CI 的
+# apt 包缓存正位于 .build/cache/ —— 于是 workflow 里 "restore 缓存 → clean
+# (删缓存) → build" 的顺序把刚恢复的缓存亲手删掉, 缓存从未生效 (8 轮 CI
+# 每轮重下 1900+ 包 ~45min 的直接原因)。且 `lb clean --purge` 亦会清包缓存。
+#
+# 现行为: 默认保留 .build/cache/; 仅当显式传 --purge-cache 时才清缓存
+# (留给"需要彻底重建"的场景)。其余目录照常清理, 保证构建干净。
+PURGE_CACHE=0
+CLEAN_ARGS=""
+for arg in "$@"; do
+    case "$arg" in
+        --purge-cache) PURGE_CACHE=1 ;;
+        --purge)       ;;   # 吞掉 --purge: 不再让 lb clean 清包缓存
+        *)             CLEAN_ARGS="$CLEAN_ARGS $arg" ;;
+    esac
+done
+
+# shellcheck disable=SC2086
+lb clean noauto $CLEAN_ARGS
 rm -f config/package-lists/*.list.chroot.bak 2>/dev/null || true
-rm -rf chroot/ binary/ local/ .build/ 2>/dev/null || true
+
+if [ "$PURGE_CACHE" = "1" ]; then
+    echo "[clean] --purge-cache: 清除 .build/cache (apt 包缓存)"
+    rm -rf chroot/ binary/ local/ .build/ 2>/dev/null || true
+else
+    # 保留 .build/cache; 其余构建产物清掉
+    if [ -d .build/cache ]; then
+        echo "[clean] 保留 apt 包缓存: $(du -sh .build/cache 2>/dev/null | cut -f1)"
+    fi
+    rm -rf chroot/ binary/ local/ 2>/dev/null || true
+    find .build -mindepth 1 -maxdepth 1 ! -name cache -exec rm -rf {} + 2>/dev/null || true
+fi

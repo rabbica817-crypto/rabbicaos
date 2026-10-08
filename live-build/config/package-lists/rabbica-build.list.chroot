@@ -91,3 +91,6 @@ qt6-wayland-private-dev
 # libpam0g-dev: Quickshell PAM 服务模块裸 include <security/_pam_types.h>
 #   (编译期才暴露, 本地全量编译实证; configure 不做检测)
 libpam0g-dev
+# ccache: 编译缓存 (分块缓存之一, 2026-10-08)。CI 侧 ~/.ccache 由 actions/cache
+#   持久化, hook 以 CMAKE_*_COMPILER_LAUNCHER 路由; 二次构建省 50-70% 编译时间。
+ccache

@@ -46,13 +46,81 @@ jobs:
           sudo dpkg -i live-build_*.deb
           test "$(lb --version)" = "20250505+deb13u1" && echo "live-build 版本正确 ✓"
 
-      # ── 3. 构建缓存: debootstrap 基础包 + apt 包 (二次构建提速 ~40min) ──
-      - name: Restore build cache
+      # ── 3. 构建缓存: 分块缓存 (2026-10-08 重构) ──
+      # 【实证教训 1】actions/cache 仅在 job 成功时才保存。此前 8 轮全部失败于末尾
+      # (KOS 收尾/verify), 导致 apt 缓存从未被保存 → 每轮重新下载 1900+ 包 (~45min)。
+      # 【实证教训 2】原 auto/clean 无条件 rm -rf .build/, 把刚 restore 的 apt 缓存
+      # 亲手删掉 → 缓存机制从未生效。已修 (见 live-build/auto/clean)。
+      # 缓存分三层, 优先级从高到低:
+      #   ① ccache (Release 附件, 最高优先): 沙箱 32 核预编译产物, 命中则编译秒级完成
+      #   ② apt 包缓存: debootstrap + 全部 deb (~45min 收益)
+      #   ③ actions/cache ccache: 次级回退
+      # ── 3a. ccache: 优先从 GitHub Release 拉沙箱预编译缓存 ──
+      # 沙箱侧: 编译后 tar.zst 上传 Release 标签 kos-ccache-v1。
+      # 路径无关化: 两侧 CCACHE_DIR=/home/user/.ccache + base_dir=/opt/rabbica-build
+      # + hash_dir=false (ccache 官方跨机器共享机制), 故缓存可跨沙箱/CI 命中。
+      - name: Fetch ccache from Release (sandbox prebuild)
+        id: fetch-ccache
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -x
+          mkdir -p ~/.ccache
+          # 拉取 Release 附件 (若标签/附件不存在, 静默回退到 actions/cache)
+          if gh release download kos-ccache-v1 --repo "${{ github.repository }}" \
+               --pattern 'ccache-*.tar.zst' --dir /tmp/ccache-dl --clobber 2>/dev/null; then
+            echo "找到 Release ccache 附件, 解压中..."
+            tar --use-compress-program=unzstd -xf /tmp/ccache-dl/ccache-*.tar.zst -C ~/
+            du -sh ~/.ccache
+            echo "ccache-hit=release" >> "$GITHUB_OUTPUT"
+          else
+            echo "Release 无 ccache 缓存 (首次或尚未上传), 回退 actions/cache"
+            echo "ccache-hit=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Restore apt cache
+        id: cache-apt
         uses: actions/cache@v4
         with:
           path: live-build/.build/cache
-          key: lb-cache-v1
-          restore-keys: lb-cache-v1
+          key: lb-apt-v2-${{ hashFiles('live-build/config/**') }}
+          restore-keys: |
+            lb-apt-v2-
+            lb-cache-v1
+
+      - name: Restore ccache (fallback)
+        id: cache-ccache
+        if: steps.fetch-ccache.outputs.ccache-hit != 'release'
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: kos-ccache-${{ github.sha }}
+          restore-keys: |
+            kos-ccache-
+
+      - name: Cache status
+        run: |
+          echo "ccache source:    ${{ steps.fetch-ccache.outputs.ccache-hit || 'none' }}"
+          echo "apt cache hit:    ${{ steps.cache-apt.outputs.cache-hit }}"
+          echo "actions ccache:   ${{ steps.cache-ccache.outputs.cache-hit }}"
+          du -sh ~/.ccache 2>/dev/null || echo "ccache: 空 (首次)"
+          du -sh live-build/.build/cache 2>/dev/null || echo "apt cache: 空 (首次)"
+          grep -E "base_dir|hash_dir" ~/.ccache/ccache.conf 2>/dev/null || echo "(ccache.conf 待 hook 生成)"
+
+      # ccache 需在 chroot 内可见: live-build 的 chroot 从 config/includes.chroot 取文件。
+      # 【重要】ccache 编译发生在 chroot 内 (/home/user/.ccache), 而缓存下载在宿主 ~/.ccache。
+      # 桥接: 把宿主 ccache 注入 config/includes.chroot/home/user/.ccache (构建前),
+      # 构建后再把 chroot 内的增量回拷宿主供保存。
+      - name: Provision ccache for chroot
+        run: |
+          sudo apt-get install -y -qq ccache
+          ccache --max-size=3G || true
+          ccache -s || true
+          # 注入 chroot (includes.chroot 会整体拷入 chroot 的对应路径)
+          sudo mkdir -p live-build/config/includes.chroot/home/user/.ccache
+          sudo cp -a ~/.ccache/. live-build/config/includes.chroot/home/user/.ccache/ 2>/dev/null || true
+          echo "注入 chroot 的 ccache: $(sudo du -sh live-build/config/includes.chroot/home/user/.ccache 2>/dev/null | cut -f1)"
 
       # ── 4. 构建 (auto/build 会先暂存 apps-cn/ 下的国产应用 deb) ──
       # 【实证教训】不要用 `| tee`: 管道全缓冲导致 Actions 时间戳失真且日志延迟,
@@ -61,7 +129,9 @@ jobs:
         working-directory: live-build
         run: |
           set -eo pipefail
-          sudo ./auto/clean --purge || true
+          # 不使用 --purge: 新版 auto/clean 会吞掉该参数并保留 .build/cache
+          # (apt 包缓存); 若确需彻底重建, 改用 ./auto/clean --purge-cache
+          sudo ./auto/clean || true
           sudo ./auto/build
           ls -lh *.iso
 
@@ -69,6 +139,56 @@ jobs:
       - name: Print KOS build log on failure
         if: failure()
         run: sudo cat live-build/chroot/var/log/rabbica-kos-build.log || echo "(日志不存在, 见上方 build-process.log 尾部)"
+
+      # ── 5b. 关键: 即使失败也保存缓存 (分块缓存核心) ──
+      # actions/cache 的 "保存" 由 post-step 在 job 结束时执行, 而 post-step 默认
+      # 仅在 job 成功时保存。用显式 actions/cache/save + if: always() 保证失败也存。
+      # 先把 chroot 内的 ccache 回拷到宿主 ~/.ccache (桥接 chroot/宿主目录差异)。
+      - name: Sync ccache from chroot
+        if: always()
+        run: |
+          if [ -d live-build/chroot/home/user/.ccache ]; then
+            sudo cp -a live-build/chroot/home/user/.ccache/. ~/.ccache/ 2>/dev/null || true
+            echo "回拷后宿主 ccache: $(du -sh ~/.ccache | cut -f1)"
+            ccache -s 2>/dev/null | head -12 || true
+          else
+            echo "chroot ccache 不存在 (构建未到编译阶段)"
+          fi
+
+      - name: Save apt cache (always)
+        if: always() && steps.cache-apt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: live-build/.build/cache
+          key: lb-apt-v2-${{ hashFiles('live-build/config/**') }}-${{ github.run_id }}
+
+      - name: Save ccache (always)
+        if: always() && steps.fetch-ccache.outputs.ccache-hit != 'release' && steps.cache-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key: kos-ccache-${{ github.sha }}
+
+      # 把 CI 侧新增的 ccache 增量回传 Release, 供后续轮次使用 (持续积累命中率)
+      - name: Upload ccache back to Release
+        if: always() && hashFiles('~/.ccache/**') != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          SIZE=$(du -sm ~/.ccache 2>/dev/null | cut -f1 || echo 0)
+          echo "ccache 大小: ${SIZE}MB"
+          if [ "${SIZE:-0}" -lt 20 ]; then
+            echo "ccache 过小 (<20MB), 跳过上传"
+            exit 0
+          fi
+          tar --use-compress-program='zstd -T0 -3' -cf /tmp/ccache-ci.tar.zst -C ~ .ccache
+          ls -lh /tmp/ccache-ci.tar.zst
+          # Release 标签复用 kos-ccache-v1; 已存在则覆盖附件
+          gh release view kos-ccache-v1 --repo "${{ github.repository }}" >/dev/null 2>&1 \
+            || gh release create kos-ccache-v1 --repo "${{ github.repository }}" \
+                 --title "KOS ccache (CI 累积)" --notes "Quickshell/NextKde 编译缓存, 自动更新" || true
+          gh release upload kos-ccache-v1 /tmp/ccache-ci.tar.zst --repo "${{ github.repository }}" --clobber
 
       # ── 6. 产物命名 + 校验和 ──
       - name: Rename & checksum

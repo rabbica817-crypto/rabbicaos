@@ -6,11 +6,11 @@ Debian 13 (trixie) + KDE Plasma 6.3 + KOS Desktop Shell（Quickshell 0.3.x）自
 GitHub Actions 云端构建可安装 ISO。仓库: https://github.com/rabbica817-crypto/rabbicaos
 
 ## 当前进行中
-- **CI Run 7**（ID 37749988829，2026-10-08 08:27 UTC 触发）构建中，全部修复代码已含
-- 查状态: `gh run view 37749988829 --repo rabbica817-crypto/rabbicaos`
+- **CI Run 8**（ID 37755982186，2026-10-08 09:20 UTC 触发，head 9d46d79）构建中
+- 查状态: `gh run view 37755982186 --repo rabbica817-crypto/rabbicaos`
 - 成功 → 验证 artifact（rabbicaos-iso + sha256）；打 `rbc-v1.0` tag 可发 Release
 
-## 六轮 CI 迭代史（全部有实证依据）
+## 七轮 CI 迭代史（全部有实证依据）
 | Run | 失败点 | 根因与修复 |
 |-----|--------|-----------|
 | 1 | live-build 不识别 trixie | 从 Debian pool 装 live-build_20250505+deb13u1 |
@@ -20,7 +20,8 @@ GitHub Actions 云端构建可安装 ISO。仓库: https://github.com/rabbica817
 | 5 | ninja 缺 wayland 协议 | ext-background-effect-v1 需 wayland-protocols>=1.45，trixie=1.44 → 补丁禁用模块（KOS 无 import，无损）|
 | 5 | PAM 头缺失 | 清单补 libpam0g-dev |
 | 6 | 误触发（旧代码） | 已取消 |
-| 7 | 构建中 | —— |
+| 7 | 8/9 的 install apps 收尾 | install-apps.sh 为运行中系统设计：enable --now/restart/busctl ReloadConfig 在 chroot（无 user manager）必败；SYSTEMD_OFFLINE=1 只能跳过 daemon-reload → 补丁 C/D：enable 去掉 --now（保留自启动注册），runtime 动作加 \|\| true / 注释（含 verify-apps-install.sh:46 is-active）|
+| 8 | 构建中 | —— |
 
 ## 已固化进仓库的关键决策
 1. **KOS_BUILD_KWIN_PLUGINS=OFF**：上游 KWin 插件用 6.4 API（KWin::Region/drawWindow 新签名/
@@ -33,6 +34,10 @@ GitHub Actions 云端构建可安装 ISO。仓库: https://github.com/rabbica817
    加载 Gui 副作用创建 → sed 移除组件名（surface-shape 一处，全仓唯一）
 5. Quickshell 需要 qt6-{base,declarative,quick3d,svg,wayland}-private-dev + libpolkit-agent-1-dev
    + libpam0g-dev（Debian 拆分包，编译期才暴露）
+6. **chroot-safe systemd（Run7）**：install-apps.sh/verify-apps-install.sh 的运行时
+   systemd 调用（enable --now/restart/busctl/is-active）在无 user manager 的 chroot
+   必败；SYSTEMD_OFFLINE=1 只覆盖 daemon-reload。补丁 C/D：enable 去 --now（自启动
+   链接保留，live 登录后 user manager 自动拉起），其余 \|\| true/注释。
 
 ## 本地实证记录（/opt/trixie-chroot，保留勿删）
 - debootstrap minbase + 全量构建依赖（63+9 包）已装齐
