@@ -153,38 +153,71 @@ fi
 # ── 阶段 5: 克隆源码并打补丁 ────────────────────────────────────────────────
 if ! done_stage "source"; then
     log "阶段 5/7: 克隆 Quickshell + NextKde 并应用 trixie 兼容补丁"
-    chroot "$CHROOT" bash -c "
-        set -e
-        # live 用户 (CI 中编译以 user 身份进行, 路径必须一致)
-        id user >/dev/null 2>&1 || useradd -m -s /bin/bash user
-        mkdir -p $BUILD
-        cd $BUILD
-        [ -d quickshell ] || git clone --depth 1 --branch $QS_TAG https://git.outfoxxed.me/quickshell/quickshell.git quickshell
-        [ -d NextKde ]    || git clone --depth 1 https://github.com/SuceV587/NextKde.git NextKde
 
-        # 补丁 A: surface-shape 的 find_package(GuiPrivate) 是 Qt6.9+ 机制
-        sed -i 's/COMPONENTS Core Gui GuiPrivate Qml Quick WaylandClient/COMPONENTS Core Gui Qml Quick WaylandClient/' \
-            $BUILD/NextKde/shell/native/surface-shape/CMakeLists.txt
+    # 与阶段 6 同样用 heredoc 生成内部脚本: 函数/clone 回退逻辑都在 chroot 内执行
+    # (宿主定义的 shell 函数无法跨 chroot 边界)。
+    cat > "$CHROOT/rbc-inner-source.sh" <<INNER
+#!/bin/bash
+set -e
+BUILD=$BUILD
+QS_TAG=$QS_TAG
 
-        # 补丁 B: background_effect 需 wayland-protocols>=1.45 (trixie=1.44)
-        sed -i -e '/^add_subdirectory(background_effect)\$/d' \
-               -e '/^list(APPEND WAYLAND_MODULES Quickshell.Wayland._BackgroundEffect)\$/d' \
-            $BUILD/quickshell/src/wayland/CMakeLists.txt
+# 克隆函数 (带镜像回退): 国内云主机访问 GitHub 常被重置 (curl (35) Connection
+# reset by peer 实证), 故依次尝试 直连 → ghproxy 镜像 → gitee 镜像。
+clone_repo() {
+    _name="\$1"; _tag="\$2"
+    _tagarg=""; [ -n "\$_tag" ] && _tagarg="--branch \$_tag"
+    case "\$_name" in
+        quickshell)
+            _urls="https://git.outfoxxed.me/quickshell/quickshell.git
+https://ghproxy.net/https://github.com/quickshell-mirror/quickshell.git" ;;
+        NextKde)
+            _urls="https://github.com/SuceV587/NextKde.git
+https://ghproxy.net/https://github.com/SuceV587/NextKde.git
+https://gitee.com/mirrors/NextKde.git" ;;
+    esac
+    for _u in \$_urls; do
+        echo "  尝试 \$_name <- \$_u"
+        rm -rf "\$BUILD/\$_name"
+        if git clone --depth 1 \$_tagarg "\$_u" "\$BUILD/\$_name" 2>&1 | tail -2; then
+            [ -d "\$BUILD/\$_name/.git" ] && { echo "  ✓ \$_name 克隆成功"; return 0; }
+        fi
+    done
+    echo "  ✗ \$_name 全部镜像失败"; return 1
+}
 
-        # 补丁 C/D: install-apps.sh / verify-apps-install.sh 的运行时 systemd 调用
-        sed -i \
-            -e 's#^systemctl --user enable --now kos-data\.service\$#systemctl --user enable kos-data.service#' \
-            -e 's#^systemctl --user restart kos-data\.service\$#& || true#' \
-            -e 's#^    org\.freedesktop\.DBus ReloadConfig >/dev/null\$#& || true#' \
-            $BUILD/NextKde/tools/install-apps.sh
-        sed -i \
-            -e 's@^systemctl --user is-enabled kos-data.service >/dev/null || failed=1\$@: skipped@' \
-            -e 's@^systemctl --user is-active kos-data.service >/dev/null || failed=1\$@test -L \"\${XDG_CONFIG_HOME:-\$HOME/.config}/systemd/user/graphical-session.target.wants/kos-data.service\" || failed=1@' \
-            $BUILD/NextKde/tools/verify-apps-install.sh
+id user >/dev/null 2>&1 || useradd -m -s /bin/bash user
+mkdir -p \$BUILD
+[ -d \$BUILD/quickshell ] || clone_repo quickshell \$QS_TAG
+[ -d \$BUILD/NextKde ]    || clone_repo NextKde ""
 
-        chown -R user:user $BUILD
-        echo '补丁已应用'
-    " || { err "源码准备失败"; exit 1; }
+# 补丁 A: surface-shape 的 find_package(GuiPrivate) 是 Qt6.9+ 机制
+sed -i 's/COMPONENTS Core Gui GuiPrivate Qml Quick WaylandClient/COMPONENTS Core Gui Qml Quick WaylandClient/' \
+    \$BUILD/NextKde/shell/native/surface-shape/CMakeLists.txt
+
+# 补丁 B: background_effect 需 wayland-protocols>=1.45 (trixie=1.44)
+sed -i -e '/^add_subdirectory(background_effect)\$/d' \
+       -e '/^list(APPEND WAYLAND_MODULES Quickshell.Wayland._BackgroundEffect)\$/d' \
+    \$BUILD/quickshell/src/wayland/CMakeLists.txt
+
+# 补丁 C/D: install-apps.sh / verify-apps-install.sh 的运行时 systemd 调用
+sed -i \
+    -e 's#^systemctl --user enable --now kos-data\.service\$#systemctl --user enable kos-data.service#' \
+    -e 's#^systemctl --user restart kos-data\.service\$#& || true#' \
+    -e 's#^    org\.freedesktop\.DBus ReloadConfig >/dev/null\$#& || true#' \
+    \$BUILD/NextKde/tools/install-apps.sh
+sed -i \
+    -e 's@^systemctl --user is-enabled kos-data.service >/dev/null || failed=1\$@: skipped@' \
+    -e 's@^systemctl --user is-active kos-data.service >/dev/null || failed=1\$@test -L "\${XDG_CONFIG_HOME:-\$HOME/.config}/systemd/user/graphical-session.target.wants/kos-data.service" || failed=1@' \
+    \$BUILD/NextKde/tools/verify-apps-install.sh
+
+chown -R user:user \$BUILD
+echo '补丁已应用'
+INNER
+
+    chmod +x "$CHROOT/rbc-inner-source.sh"
+    cp /etc/resolv.conf "$CHROOT/etc/resolv.conf" 2>/dev/null || true
+    chroot "$CHROOT" /rbc-inner-source.sh || { err "源码准备失败"; exit 1; }
     ok "源码与补丁就绪"
     mark_stage "source"
 else
