@@ -4,6 +4,10 @@
 #       config/packages.chroot/ (live-build 会自动安装该目录的 deb)
 set -e
 cd "$(dirname "$0")/.."
+# 每次构建前重新生成 live-build 配置 (auto/config 幂等):
+# 【实证教训】漏掉 lb config 会让 live-build 落到内置默认值 (老版本默认
+# ubuntu/precise), debootstrap 去拉错误的发行版
+./auto/config
 mkdir -p config/packages.chroot
 if ls ../apps-cn/*.deb >/dev/null 2>&1; then
   cp -f ../apps-cn/*.deb config/packages.chroot/

@@ -34,11 +34,15 @@ jobs:
           df -h /
 
       # ── 2. 构建工具 ──
-      - name: Install live-build
+      # 【实证教训】runner 自带的 Ubuntu live-build 3.0~a57 太老, 不认识 trixie
+      # (会退化去拉 precise 源)。改装 Debian trixie 官方版 (依赖仅 cpio+debootstrap)
+      - name: Install live-build (Debian trixie official)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y live-build debootstrap xorriso
-          lb --version && debootstrap --version
+          sudo apt-get install -y -qq cpio debootstrap xorriso wget
+          wget -q https://deb.debian.org/debian/pool/main/l/live-build/live-build_20250505+deb13u1_all.deb
+          sudo dpkg -i live-build_*.deb
+          test "$(lb --version)" = "20250505+deb13u1" && echo "live-build 版本正确 ✓"
 
       # ── 3. 构建缓存: debootstrap 基础包 + apt 包 (二次构建提速 ~40min) ──
       - name: Restore build cache
