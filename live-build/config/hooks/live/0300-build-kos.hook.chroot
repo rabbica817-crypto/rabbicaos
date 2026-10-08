@@ -111,6 +111,11 @@ fi
 
 # ---- 2. live 用户: live-config 启动时跳过已存在同名用户; 构建期预建以部署到家目录 ----
 # KWin 插件系统安装需要 root → 临时 NOPASSWD (9000-cleanup 钩子删除本文件, 不残留进 ISO)
+# 【Run9 修复】/home/user 归主必须是 user: 步骤 1b 已经 mkdir -p /home/user/.ccache,
+# 而 useradd -m 对**已存在**的家目录不会改属主 → 目录留在 root:root, 导致以 user
+# 身份运行 go 时 "could not create module cache: mkdir /home/user/go: permission
+# denied" (Run9 实证, NextKde C++ 41/41 全过后卡在这)。故此处显式 chown。
+# 同时预建 Go 的 GOPATH 与构建缓存目录 (Go 组件 kos-data-service 需要)。
 step "2/9 live 用户与临时 NOPASSWD" sh -c '
   if ! getent passwd user >/dev/null; then
     useradd -m -s /bin/bash user
@@ -119,8 +124,10 @@ step "2/9 live 用户与临时 NOPASSWD" sh -c '
   adduser user sudo 2>/dev/null || true
   printf "user ALL=(ALL) NOPASSWD:ALL\n" > /etc/sudoers.d/01-rbc-build
   chmod 440 /etc/sudoers.d/01-rbc-build
-  mkdir -p /opt/rabbica-build
-  chown -R user:user /opt/rabbica-build
+  mkdir -p /home/user /opt/rabbica-build
+  mkdir -p /home/user/go /home/user/.cache/go-build /home/user/.ccache
+  chown -R user:user /home/user /opt/rabbica-build
+  chmod 755 /home/user
 '
 
 # ---- 3. 克隆源码 ----
@@ -196,6 +203,7 @@ step "7/9 编译+安装 quickshell 到 /usr/local" \
 # go.mod 要求的 toolchain (go 1.26) 由 GOTOOLCHAIN=auto 自动下载, runner 网络可达。
 step "8/9 kosctl install + lockscreen + apps" \
   su - user -c "export SYSTEMD_OFFLINE=1 KOS_BUILD_SPATIAL=ON KOS_BUILD_KWIN_PLUGINS=OFF \
+    GOPATH=/home/user/go GOMODCACHE=/home/user/go/pkg/mod GOCACHE=/home/user/.cache/go-build \
     GOROOT=\$(dirname \$(dirname \$(readlink -f /usr/bin/go))); \
     cd /opt/rabbica-build/NextKde && ./tools/kosctl install && ./tools/kosctl install lockscreen && ./tools/kosctl install apps"
 
