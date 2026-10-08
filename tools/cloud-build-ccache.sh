@@ -21,8 +21,18 @@ QS_TAG=v0.3.0
 CCACHE_DIR=/home/user/.ccache     # chroot 内 ccache 路径
 CCACHE_BAK=/opt/rbc-ccache        # 宿主侧 ccache 备份
 OUT=/opt/rbc-out                  # 产物输出目录
-JOBS=$(nproc)
 MIRROR="https://mirrors.tuna.tsinghua.edu.cn/debian"     # 国内加速 (可改官方源)
+# 并行度: 按内存自适应 —— 单个 cc1plus 峰值约 1.5-2GB (Qt/QML 重模板 TU 偏高),
+# 且链接阶段 (LTO) 也会吃内存。经验系数: 内存GB/3 最稳, 留足余量。
+#   16核/32G -> j10    64核/64G -> j21    8核/16G -> j5
+# 宁可少开几个核 (编译慢一点), 也不要 OOM —— OOM 会让 cc1plus 被 SIGKILL,
+# ninja 报错但原因隐蔽, 极难排查。
+JOBS=$(nproc)
+MEM_GB=$(free -g | awk '/^Mem:/{print $2}')
+MEM_JOBS=$(( MEM_GB / 3 ))
+[ "$MEM_JOBS" -lt 2 ] && MEM_JOBS=2
+[ "$JOBS" -gt "$MEM_JOBS" ] && JOBS="$MEM_JOBS"
+[ "$JOBS" -lt 1 ] && JOBS=1
 # ────────────────────────────────────────────────────────────────────────────
 
 log() { echo -e "\n\033[1;36m[rbc] $*\033[0m"; }
@@ -36,13 +46,15 @@ mark_stage() { echo "$1" >> "$STAMP"; }
 
 echo "============================================================"
 echo "  RabbicaOS 云主机 ccache 构建"
-echo "  CPU: $JOBS 核 | 内存: $(free -g | awk '/^Mem:/{print $2}')GB"
+echo "  CPU: $(nproc) 核 | 内存: ${MEM_GB}GB"
+echo "  并行度: -j${JOBS} (按内存自适应, 防 OOM)"
 echo "  磁盘: $(df -h / | awk 'NR==2{print $4}') 可用"
 echo "============================================================"
 
 # ── 阶段 0: 前置检查 ────────────────────────────────────────────────────────
 if [ "$(id -u)" != "0" ]; then err "请用 sudo 运行: sudo bash $0"; exit 1; fi
-if [ "$JOBS" -lt 8 ]; then err "CPU 核数过少 ($JOBS), 建议 ≥16 核"; fi
+if [ "$(nproc)" -lt 4 ]; then err "CPU 核数过少 ($(nproc)), 建议 ≥8 核"; exit 1; fi
+if [ "${MEM_GB:-0}" -lt 8 ]; then err "内存过少 (${MEM_GB}GB), 建议 ≥16GB"; exit 1; fi
 
 # ── 阶段 1: 安装宿主依赖 ────────────────────────────────────────────────────
 if ! done_stage "deps"; then
@@ -181,43 +193,54 @@ fi
 
 # ── 阶段 6: 编译 (ccache 启用, 跨机器共享配置) ──────────────────────────────
 if ! done_stage "build"; then
-    log "阶段 6/7: 编译 Quickshell + NextKde ($JOBS 核, ccache 加速)"
-    chroot "$CHROOT" bash -c "
-        export HOME=/home/user
-        export CCACHE_DIR=$CCACHE_DIR
-        mkdir -p $CCACHE_DIR
-        # 跨机器共享关键配置: base_dir 让哈希基于相对路径, hash_dir=false 忽略 cwd
-        cat > $CCACHE_DIR/ccache.conf <<'CCEOF'
+    log "阶段 6/7: 编译 Quickshell + NextKde ($JOBS 并行, ccache 加速)"
+
+    # 用 heredoc 把内部脚本写到 chroot 内再执行 —— 避免多层引号嵌套导致的
+    # 变量无法展开 (单引号内 $VAR 是字面量) 与转义错误。所有变量由 heredoc
+    # 展开 (<<EOF 不加引号), 但脚本自身用到的命令行参数 ($1) 用 \$ 转义。
+    cat > "$CHROOT/rbc-inner-build.sh" <<INNER
+#!/bin/bash
+set -e
+export HOME=/home/user
+export CCACHE_DIR=$CCACHE_DIR
+export PATH=/usr/lib/ccache:\$PATH
+
+mkdir -p $CCACHE_DIR
+cat > $CCACHE_DIR/ccache.conf <<'CCEOF'
 max_size = 3.0G
 base_dir = $BUILD
 hash_dir = false
 sloppiness = include_file_ctime,include_file_mtime,time_macros
 compiler_check = content
 CCEOF
-        chown -R user:user $CCACHE_DIR
-        su - user -c 'export CCACHE_DIR=$CCACHE_DIR; ccache -z >/dev/null 2>&1'
+chown -R user:user $CCACHE_DIR
 
-        # --- Quickshell ---
-        su - user -c 'export CCACHE_DIR=$CCACHE_DIR; cd $BUILD/quickshell && \
-            cmake -S $BUILD/quickshell -B $BUILD/quickshell/build -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
-              -DCRASH_HANDLER=OFF \
-              -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache' \
-            || exit 1
-        su - user -c 'export CCACHE_DIR=$CCACHE_DIR; cmake --build $BUILD/quickshell/build -j$JOBS' \
-            || exit 1
-        echo 'Quickshell 编译完成'
+# --- Quickshell ---
+echo "== 配置 Quickshell"
+su - user -c "export CCACHE_DIR=$CCACHE_DIR; ccache -z >/dev/null 2>&1 || true; \\
+  cmake -S $BUILD/quickshell -B $BUILD/quickshell/build -G Ninja \\
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \\
+    -DCRASH_HANDLER=OFF \\
+    -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+echo "== 编译 Quickshell (-j$JOBS)"
+su - user -c "export CCACHE_DIR=$CCACHE_DIR; cmake --build $BUILD/quickshell/build -j$JOBS"
+echo "Quickshell 编译完成"
 
-        # --- NextKde (KOS_BUILD_KWIN_PLUGINS=OFF) ---
-        su - user -c 'export CCACHE_DIR=$CCACHE_DIR; cd $BUILD/NextKde && \
-            SYSTEMD_OFFLINE=1 KOS_BUILD_SPATIAL=OFF KOS_BUILD_KWIN_PLUGINS=OFF \
-            GOROOT=\$(dirname \$(dirname \$(readlink -f /usr/bin/go))) \
-            ./tools/kosctl install' \
-            || echo '(NextKde install 阶段如有运行时错误可忽略, 编译产物已生成)'
-        echo 'NextKde 编译完成'
+# --- NextKde (KOS_BUILD_KWIN_PLUGINS=OFF, 空间引擎关闭以省时) ---
+echo "== 编译 NextKde"
+su - user -c "export CCACHE_DIR=$CCACHE_DIR; cd $BUILD/NextKde && \\
+  SYSTEMD_OFFLINE=1 KOS_BUILD_SPATIAL=OFF KOS_BUILD_KWIN_PLUGINS=OFF \\
+  GOROOT=\\\$(dirname \\\$(dirname \\\$(readlink -f /usr/bin/go))) \\
+  ./tools/kosctl install" || echo "(NextKde install 运行时步骤报错可忽略)"
+echo "NextKde 编译完成"
 
-        su - user -c 'export CCACHE_DIR=$CCACHE_DIR; ccache -s | head -12'
-    " || { err "编译失败"; exit 1; }
+echo "== ccache 统计"
+su - user -c "export CCACHE_DIR=$CCACHE_DIR; ccache -s | head -12"
+INNER
+
+    chmod +x "$CHROOT/rbc-inner-build.sh"
+    cp /etc/resolv.conf "$CHROOT/etc/resolv.conf" 2>/dev/null || true
+    chroot "$CHROOT" /rbc-inner-build.sh || { err "编译失败"; exit 1; }
     ok "编译完成"
     mark_stage "build"
 else
