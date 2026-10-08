@@ -68,3 +68,23 @@ libcli11-dev
 libjemalloc-dev
 spirv-tools
 pkg-config
+# ---- CI Run4 复盘补充 ----
+# curl: KOS README Ubuntu 验证清单明确列出 (kosctl/平台服务运行需要), 此前遗漏
+# libonnxruntime-dev: KOS_BUILD_SPATIAL=ON (README: "打包与 CI 用这个") 强制构建
+#   景深引擎, 硬依赖 OpenCV+ONNX Runtime; trixie 有 1.21.0 (apt-cache policy 实证)
+# ---- kosctl install apps (Calendar/Todo/Weather/Music) 依赖 ----
+# 依据 apps/README.zh-CN.md: kcalendarcore(GStreamer)(TagLib) 由音乐/日历/待办使用
+qt6-multimedia-dev
+libgstreamer1.0-dev
+libgstreamer-plugins-base1.0-dev
+libtag1-dev
+# ---- 本地 chroot configure 实证补充 (trixie 环境全绿验证发现) ----
+# libpolkit-agent-1-dev: Quickshell src/services/polkit 的 pkg_check_modules(polkit-agent-1) 硬依赖
+# qt6-*-private-dev: Quickshell 使用 Qt6 私有 API (QtQuick/6.8.2 等版本化私有头目录),
+#   Debian 将私有头拆分为独立包, 不装则 Generate step 报 INTERFACE_INCLUDE_DIRECTORIES 失效
+libpolkit-agent-1-dev
+qt6-base-private-dev
+qt6-declarative-private-dev
+qt6-quick3d-private-dev
+qt6-svg-private-dev
+qt6-wayland-private-dev

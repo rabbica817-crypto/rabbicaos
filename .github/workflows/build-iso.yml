@@ -55,12 +55,14 @@ jobs:
           restore-keys: lb-cache-v1
 
       # ── 4. 构建 (auto/build 会先暂存 apps-cn/ 下的国产应用 deb) ──
+      # 【实证教训】不要用 `| tee`: 管道全缓冲导致 Actions 时间戳失真且日志延迟,
+      # Actions 对 step 输出本身已有实时完整记录, 直接输出即可
       - name: Build ISO
         working-directory: live-build
         run: |
           set -eo pipefail
           sudo ./auto/clean --purge || true
-          sudo ./auto/build 2>&1 | tee build-process.log
+          sudo ./auto/build
           ls -lh *.iso
 
       # ── 5. 失败时取出 KOS 编译日志 (0300 钩子归档位置) ──

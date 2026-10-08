@@ -27,3 +27,15 @@ konsole
 calamares
 calamares-settings-debian
 squashfs-tools
+# ---- KOS 运行时集成包（依据 NextKde README "运行时集成" 清单映射 Debian 包名, 全部 apt-cache 实证存在）----
+# 网络(已有 network-manager) 音频(已有 wireplumber) 之外的集成: 蓝牙/亮度/剪贴板/文件操作
+bluez
+brightnessctl
+wl-clipboard
+cliphist
+xdg-utils
+libglib2.0-0
+libqt6sql6-sqlite
+# KOS 音乐应用播放链: QtMultimedia → GStreamer 后端运行时插件 (apps/README: 播放/转码插件为运行时依赖)
+gstreamer1.0-plugins-base
+gstreamer1.0-plugins-good
