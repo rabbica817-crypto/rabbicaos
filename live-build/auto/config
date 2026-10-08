@@ -1,0 +1,54 @@
+#!/bin/sh
+# ============================================================================
+#  RabbicaOS ISO — live-build 配置
+#  依据: Debian Live Manual https://live-team.pages.debian.net/live-manual/
+#        (lb config 章节参数说明) + Debian 13 release notes
+#
+#  设计决策与依据:
+#   1. --distribution trixie
+#      Debian 13 自带 Plasma 6.3.6 / Qt 6.8.2 / KF6 6.13 / 内核 6.12 LTS
+#      (来源: Debian 13 release notes 2.2.11 Plasma 6 节)，满足 KOS 要求
+#      (上游 README: Qt>=6.6, KF6>=5.240, 上游 KWin)
+#   2. --archive-areas 含 non-free-firmware
+#      bookworm 起固件独立归档区且安装镜像默认集成 (Debian 12 release notes)
+#      —— 保证无线网卡/N 卡用户开箱可用
+#   3. --debian-installer none + Calamares 集成
+#      【实证修正 2026-10-07】trixie 仓库已移除 live-installer 包
+#      (chroot 内 apt-cache policy live-installer 为空)，live-build 1:20250505
+#      内部亦无 live 安装器逻辑 —— 故改用 Debian 官方 live 镜像现行方案:
+#      calamares + calamares-settings-debian (13.0.13, 由 Debian 开发者
+#      Jonathan Carter 维护)。其 unpackfs.conf 源路径
+#      /run/live/medium/live/filesystem.squashfs 正是 live-build 标准产物，
+#      安装=完整复制 live 系统，KOS/品牌/预装全部保留。
+#   4. --binary-images iso-hybrid   单文件 hybrid ISO，dd 直写 U 盘可引导
+#   5. 镜像源参数化，默认清华 TUNA（面向国内用户）
+# ============================================================================
+set -e
+
+# 可通过环境变量覆盖: RBC_MIRROR=... ./auto/config
+MIRROR="${RBC_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/debian/}"
+SECURITY="${RBC_MIRROR_SECURITY:-https://mirrors.tuna.tsinghua.edu.cn/debian-security}"
+
+lb config noauto \
+	--architecture amd64 \
+	--distribution trixie \
+	--archive-areas "main contrib non-free non-free-firmware" \
+	--binary-images iso-hybrid \
+	--bootappend-live "boot=live components locales=zh_CN.UTF-8 keyboard-layouts=cn timezone=Asia/Shanghai username=user" \
+	--bootappend-install "locales=zh_CN.UTF-8 keyboard-layouts=cn timezone=Asia/Shanghai" \
+	--debian-installer none \
+	--debian-installer-gui false \
+	--iso-volume "RabbicaOS" \
+	--iso-application "RabbicaOS $(date +%Y%m%d)" \
+	--iso-publisher "RabbicaOS Project (RbcOS); based on Debian 13, KDE Plasma 6 and KOS Desktop Shell" \
+	--parent-mirror-bootstrap "${MIRROR}" \
+	--mirror-bootstrap "${MIRROR}" \
+	--mirror-chroot "${MIRROR}" \
+	--mirror-chroot-security "${SECURITY}" \
+	--mirror-binary "${MIRROR}" \
+	--mirror-binary-security "${SECURITY}" \
+	--mirror-debian-installer "${MIRROR}" \
+	--firmware-binary true \
+	--firmware-chroot true \
+	--memtest none \
+	"${@}"

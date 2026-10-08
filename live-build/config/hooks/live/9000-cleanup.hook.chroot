@@ -1,0 +1,15 @@
+#!/bin/sh
+# RabbicaOS — 镜像瘦身与构建痕迹清理
+# 依据: Debian Live Manual (binary 阶段前减小 squashfs 体积的常规做法)
+set -e
+# 编译源码与构建目录只服务于安装过程, 不进最终系统
+rm -rf /opt/rabbica-build
+# 临时 sudo 规则 (0300 钩子创建) — 绝不进 ISO
+rm -f /etc/sudoers.d/01-rbc-build
+# apt 缓存与索引 (live-build 会做一轮, 这里兜底)
+rm -rf /var/cache/apt/archives/*.deb /var/lib/apt/lists/* 2>/dev/null || true
+# 构建日志保留到 /usr/share/doc 便于用户排查 (体积小)
+mkdir -p /usr/share/doc/rabbicaos
+[ -f /var/log/rabbica-kos-build.log ] && \
+  mv /var/log/rabbica-kos-build.log /usr/share/doc/rabbicaos/build.log
+echo "[rbc] 清理完成"

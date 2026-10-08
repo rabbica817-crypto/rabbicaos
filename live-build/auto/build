@@ -1,0 +1,14 @@
+#!/bin/sh
+# RabbicaOS — live-build 官方惯例的 auto/build 包装 (Debian Live Manual)
+# 职责: 构建前把仓库根 apps-cn/ 下的国产应用官方 deb 暂存进
+#       config/packages.chroot/ (live-build 会自动安装该目录的 deb)
+set -e
+cd "$(dirname "$0")/.."
+mkdir -p config/packages.chroot
+if ls ../apps-cn/*.deb >/dev/null 2>&1; then
+  cp -f ../apps-cn/*.deb config/packages.chroot/
+  echo "[rbc] 已暂存国产应用: $(ls ../apps-cn/*.deb | tr '\n' ' ')"
+else
+  echo "[rbc] apps-cn/ 无 deb 包, 本镜像不含国产应用 (放入后重新构建即可)"
+fi
+lb build noauto "${@}"

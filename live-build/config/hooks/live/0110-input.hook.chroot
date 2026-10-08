@@ -1,0 +1,23 @@
+#!/bin/sh
+# RabbicaOS — 输入法默认配置
+# 依据: fcitx5 官方文档 + Debian wiki InputMethod:
+#   im-config -n fcitx5 写入用户级默认; /etc/environment.d 保障
+#   Wayland 下 Qt/GTK 应用的 XIM/QtIM 模块统一走 fcitx
+set -e
+# im-config 在 chroot 无桌面会话也能写配置文件
+im-config -n fcitx5 || true
+# 系统级环境变量（对 live 用户与安装后首用户同时生效）
+mkdir -p /etc/environment.d
+cat > /etc/environment.d/90-rabbica-input.conf <<'EOF'
+GTK_IM_MODULE=fcitx
+QT_IM_MODULE=fcitx
+XMODIFIERS=@im=fcitx
+SDL_IM_MODULE=fcitx
+EOF
+# 为 lightdm/sddm 会话兜底（/etc/profile 兼容老式会话）
+cat > /etc/profile.d/90-rabbica-input.sh <<'EOF'
+export GTK_IM_MODULE=fcitx
+export QT_IM_MODULE=fcitx
+export XMODIFIERS=@im=fcitx
+EOF
+echo "[rbc] 输入法配置完成"

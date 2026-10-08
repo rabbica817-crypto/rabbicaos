@@ -1,0 +1,74 @@
+#!/bin/sh
+# ============================================================================
+# RabbicaOS — chroot 内编译并安装 KOS Desktop Shell 完整版
+#
+# 流程: 建 live 用户 → 编译 Quickshell 0.3.x → 编译安装 KOS（含锁屏/四件套/景深）
+#
+# 关键依据:
+#  - Quickshell 源: git.outfoxxed.me 官方仓库 v0.3.0 (KOS README 要求 0.3.x)
+#  - KOS 源: github.com/SuceV587/NextKde (上游 main)
+#  - kosctl install 部署到 $HOME/.local + systemd 用户单元 (packaging/systemd/)
+#    → 必须以 live 用户身份运行, 不能用 root (ExecStart=%h/... 按用户家目录解析)
+#  - SYSTEMD_OFFLINE=1: systemctl 官方离线模式 (systemctl(1)man), 让
+#    `systemctl --user enable` 在无 D-Bus 的 chroot 里只写 symlink 不连 bus
+#  - KWin 插件须装进系统前缀: kosctl 内部用 sudo → 构建期临时 NOPASSWD,
+#    装完即删 (不残留进 ISO)
+# ============================================================================
+set -e
+
+BUILD=/opt/rabbica-build
+LOG=/var/log/rabbica-kos-build.log
+LIVE_USER=user
+
+echo "[rbc] KOS 构建开始, 日志: $LOG"
+{
+  echo "=== RabbicaOS KOS build $(date -u) ==="
+
+  # ---- 1. live 用户 ----
+  # live-config 启动时跳过已存在同名用户; 构建期就建好以便以该身份编译部署
+  if ! getent passwd "$LIVE_USER" >/dev/null; then
+    useradd -m -s /bin/bash -c "RabbicaOS live user" "$LIVE_USER"
+  fi
+  echo "$LIVE_USER:$LIVE_USER" | chpasswd
+  adduser "$LIVE_USER" sudo 2>/dev/null || true
+
+  # 临时 NOPASSWD (KWin 插件系统安装需要 root; cleanup 钩子删除本文件)
+  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$LIVE_USER" > /etc/sudoers.d/01-rbc-build
+  chmod 440 /etc/sudoers.d/01-rbc-build
+
+  mkdir -p "$BUILD"
+  chown -R "$LIVE_USER:$LIVE_USER" "$BUILD"
+
+  # ---- 2. 克隆源码 ----
+  if [ ! -d "$BUILD/quickshell" ]; then
+    su - "$LIVE_USER" -c "git clone --depth 1 --branch v0.3.0 \
+        https://git.outfoxxed.me/quickshell/quickshell.git $BUILD/quickshell"
+  fi
+  if [ ! -d "$BUILD/NextKde" ]; then
+    su - "$LIVE_USER" -c "git clone --depth 1 \
+        https://github.com/SuceV587/NextKde.git $BUILD/NextKde"
+  fi
+
+  # ---- 3. 编译 Quickshell ----
+  if ! command -v qs >/dev/null 2>&1; then
+    echo "--- building quickshell v0.3.0 ---"
+    su - "$LIVE_USER" -c "cmake -S $BUILD/quickshell -B $BUILD/quickshell/build \
+        -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
+        && cmake --build $BUILD/quickshell/build -j\$(nproc)"
+    cmake --install "$BUILD/quickshell/build"
+    ldconfig
+  fi
+  command -v qs >/dev/null 2>&1 || { echo "FATAL: quickshell build failed"; exit 1; }
+
+  # ---- 4. 编译 + 安装 KOS (完整版: 景深壁纸 ON + 锁屏 + 四件套) ----
+  echo "--- installing KOS (KOS_BUILD_SPATIAL=ON) ---"
+  # su - 进入用户环境 (HOME=/home/user); SYSTEMD_OFFLINE 保证 systemctl --user 可用
+  su - "$LIVE_USER" -c "export SYSTEMD_OFFLINE=1 KOS_BUILD_SPATIAL=ON; \
+      cd $BUILD/NextKde && ./tools/kosctl install \
+      && ./tools/kosctl install lockscreen \
+      && ./tools/kosctl install apps"
+
+  echo "=== build ok $(date -u) ==="
+} > "$LOG" 2>&1 || { echo "[rbc] KOS 构建失败, 见 $LOG:"; tail -40 "$LOG"; exit 1; }
+
+echo "[rbc] KOS 构建安装完成 (详见 $LOG)"

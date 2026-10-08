@@ -1,0 +1,9 @@
+#!/bin/sh
+# RabbicaOS — 中文 locale 生成
+# 依据: Debian Reference 9.1 ( locales 包的 /etc/locale.gen 机制 )
+set -e
+sed -i 's/^# *zh_CN.UTF-8 UTF-8/zh_CN.UTF-8 UTF-8/' /etc/locale.gen
+sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen
+locale-gen
+update-locale LANG=zh_CN.UTF-8
+echo "[rbc] locales 生成完成"

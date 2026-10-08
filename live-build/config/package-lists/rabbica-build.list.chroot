@@ -1,0 +1,70 @@
+# RabbicaOS — KOS/Quickshell 编译依赖（chroot 内编译用，进不了 ISO 成品）
+# 清单来源: KOS 上游 README 的 Ubuntu 26.04 验证清单映射为 Debian trixie 包名
+# (上游 README: "以下清单已在 26.04 上完成全量构建验证"，Debian/Ubuntu 同系包名高度一致)
+# 注意: kwin-dev 提供 KWin::kwinEffects CMake 导出目标 (KWin 插件 REQUIRED)
+#       libkdecorations3-dev = Arch 的 kdecoration (KDecoration3)
+#       libvulkan-dev        = Arch 的 vulkan-headers (KWin 导出 Vulkan::Vulkan)
+git
+cmake
+ninja-build
+g++
+golang-go
+patchelf
+gettext
+qt6-base-dev
+qt6-declarative-dev
+qt6-quick3d-dev
+qt6-wayland-dev
+libqt6svg6
+qt6-image-formats-plugins
+qml6-module-qt5compat-graphicaleffects
+qml6-module-qtquick
+qml6-module-qtquick-controls
+qml6-module-qtquick-layouts
+qml6-module-qtquick-dialogs
+qml6-module-qtquick-window
+qml6-module-qtquick-effects
+qml6-module-qtqml-models
+qml6-module-qtqml-workerscript
+libopencv-dev
+libkf6windowsystem-dev
+libkf6iconthemes-dev
+libkf6globalaccel-dev
+extra-cmake-modules
+kwin-dev
+libkf6config-dev
+libkf6i18n-dev
+libkf6guiaddons-dev
+libkf6kcmutils-dev
+libkf6coreaddons-dev
+libkdecorations3-dev
+libvulkan-dev
+libplasma-dev
+libkf6kio-dev
+libkf6calendarcore-dev
+libxcb1-dev
+libxcb-composite0-dev
+libxcb-randr0-dev
+libxcb-res0-dev
+libxcb-shm0-dev
+libxcb-sync-dev
+libxcb-xfixes0-dev
+libxcb-damage0-dev
+libxcb-render0-dev
+libxcb-shape0-dev
+libxcb-cursor-dev
+libxcb-keysyms1-dev
+libxcb-icccm4-dev
+libxcb-image0-dev
+libxcb-util-dev
+libxkbcommon-x11-dev
+# ---- Quickshell 0.3.x 编译依赖（映射自 AUR makedepends）----
+qt6-svg-dev
+qt6-shadertools-dev
+libdrm-dev
+libpipewire-0.3-dev
+wayland-protocols
+libcli11-dev
+libjemalloc-dev
+spirv-tools
+pkg-config

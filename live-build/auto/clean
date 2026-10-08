@@ -1,0 +1,5 @@
+#!/bin/sh
+# 重置 live-build 构建目录 (Debian Live Manual: auto/clean 惯例)
+lb clean noauto "${@}"
+rm -f config/package-lists/*.list.chroot.bak 2>/dev/null || true
+rm -rf chroot/ binary/ local/ .build/ 2>/dev/null || true

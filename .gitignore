@@ -1,0 +1,12 @@
+# live-build 构建产物（不进仓库）
+live-build/chroot/
+live-build/binary/
+live-build/.build/
+live-build/config/packages.chroot/
+live-build/*.iso
+live-build/build-process.log
+live-build/cache/
+
+# 临时
+*.log
+.DS_Store

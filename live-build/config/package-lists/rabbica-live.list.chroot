@@ -1,0 +1,29 @@
+# RabbicaOS live 系统基础 + KDE Plasma 6 桌面
+# 依据:
+#  - KDE 组件选择: kde-standard 是 Debian 官方 KDE 任务的核心元包
+#    (trixie 内含 Plasma 6.3.6 全家桶, release notes 2.2.11)
+#  - Wayland 会话: plasma-workspace (Plasma 6) 提供 plasmawayland.desktop
+#  - 音频: Plasma 6 默认 PipeWire 栈 (pipewire-pulse/wireplumber)
+#  - 显示管理器: Plasma 6 上游默认 SDDM
+linux-image-amd64
+live-boot
+live-config
+systemd-sysv
+sudo
+locales
+kde-standard
+kwin-wayland
+plasma-nm
+plasma-pa
+sddm
+network-manager
+pipewire
+pipewire-pulse
+wireplumber
+kde-spectacle
+dolphin
+konsole
+# ---- 图形安装器（实证: trixie 已移除 live-installer, 采用 Debian 官方 live 镜像同款 Calamares 方案）----
+calamares
+calamares-settings-debian
+squashfs-tools

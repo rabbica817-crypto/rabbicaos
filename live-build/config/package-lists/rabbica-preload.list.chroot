@@ -1,0 +1,30 @@
+# RabbicaOS 中度预装（用户决策: 中文支持+浏览器+解码器, 不装大型 IDE）
+# 与 provision/rabbica-provision.sh 的 DEPS_PRELOAD/DEPS_DEV 保持一致
+# 依据:
+#  - 中文: fcitx5 + chinese-addons 是 Debian 官方推荐的 Qt5/Qt6/GTK 全覆盖拼音方案
+#    (fcitx5-frontend-qt6 是 KDE Plasma 6 / KOS QML 应用的输入法桥)
+#  - 字体: fonts-noto-cjk 是 Debian 最佳中文无衬线替代 (思源黑体)
+#  - 解码器: libavcodec-extra (ffmpeg 全解码) + vlc
+#  - 基础开发工具链轻量保留 (git/curl/build-essential), 不预装 IDE
+locales
+fcitx5
+fcitx5-chinese-addons
+fcitx5-frontend-qt5
+fcitx5-frontend-qt6
+fcitx5-frontend-gtk3
+fcitx5-frontend-gtk4
+fcitx5-config-qt
+fonts-noto-cjk
+fonts-noto-cjk-extra
+firefox-esr
+firefox-esr-l10n-zh-cn
+libavcodec-extra
+vlc
+htop
+fastfetch
+unzip
+p7zip-full
+git
+curl
+wget
+build-essential

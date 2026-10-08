@@ -1,0 +1,94 @@
+name: Build RabbicaOS ISO
+
+# 触发: 手动 (Actions 页面 Run workflow) 或推送 rbc-v* 标签时构建并发布 Release
+on:
+  workflow_dispatch:
+  push:
+    tags: [ "rbc-v*" ]
+
+env:
+  # CI runner 位于海外, 镜像源用 Debian 官方 (auto/config 已参数化支持覆盖;
+  # 本地国内构建不加这两个变量即默认清华 TUNA)
+  RBC_MIRROR: https://deb.debian.org/debian/
+  RBC_MIRROR_SECURITY: https://deb.debian.org/debian-security
+
+permissions:
+  contents: write   # 发布 Release 需要 (默认只读)
+
+jobs:
+  build-iso:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350   # KOS 编译约 30-60min, 全程留足余量 (上限 360)
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 1. 磁盘腾挪: runner 标称 ~14GB 可用, 构建峰值 ~12GB, 必须先扩容 ──
+      # (清理 GitHub 预装的大型工具链: Android SDK/ghc/dotnet/CodeQL, 约 25GB)
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/.ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/share/swift /usr/local/lib/node_modules
+          sudo docker image prune -af || true
+          echo "=== 可用磁盘 ==="
+          df -h /
+
+      # ── 2. 构建工具 ──
+      - name: Install live-build
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y live-build debootstrap xorriso
+          lb --version && debootstrap --version
+
+      # ── 3. 构建缓存: debootstrap 基础包 + apt 包 (二次构建提速 ~40min) ──
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: live-build/.build/cache
+          key: lb-cache-v1
+          restore-keys: lb-cache-v1
+
+      # ── 4. 构建 (auto/build 会先暂存 apps-cn/ 下的国产应用 deb) ──
+      - name: Build ISO
+        working-directory: live-build
+        run: |
+          set -eo pipefail
+          sudo ./auto/clean --purge || true
+          sudo ./auto/build 2>&1 | tee build-process.log
+          ls -lh *.iso
+
+      # ── 5. 失败时取出 KOS 编译日志 (0300 钩子归档位置) ──
+      - name: Print KOS build log on failure
+        if: failure()
+        run: sudo cat live-build/chroot/var/log/rabbica-kos-build.log || echo "(日志不存在, 见上方 build-process.log 尾部)"
+
+      # ── 6. 产物命名 + 校验和 ──
+      - name: Rename & checksum
+        if: success()
+        run: |
+          ISO=$(ls live-build/*.iso | head -1)
+          mv "$ISO" "RabbicaOS-1.0-amd64-$(date +%Y%m%d).iso"
+          sha256sum RabbicaOS-*.iso > RabbicaOS-1.0-amd64.sha256
+          cat RabbicaOS-*.sha256
+
+      # ── 7. 上传构建产物 (ISO 已压缩, 关闭二次压缩省时) ──
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rabbicaos-iso
+          path: |
+            RabbicaOS-*.iso
+            RabbicaOS-*.sha256
+          retention-days: 14
+          compression-level: 0
+          if-no-files-found: error
+
+      # ── 8. 推 rbc-v* 标签时发布 GitHub Release ──
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" \
+            --title "RabbicaOS ${{ github.ref_name }}" \
+            --notes "RabbicaOS 自动构建 | Debian 13 + KDE Plasma 6 + KOS Desktop 完整版 | sha256 见附件" \
+            RabbicaOS-*.iso RabbicaOS-*.sha256

@@ -1,0 +1,16 @@
+#!/bin/sh
+# RabbicaOS — Calamares 品牌接线
+# 依据: calamares-settings-debian 13.0.13 实测结构 (dpkg -c 核实):
+#   /etc/calamares/settings.conf 105 行 "branding: debian" → sed 替换为 rabbica
+#   (整文件覆盖风险大: 上游 modules 序列可能更新, 精准替换更健壮)
+set -e
+sed -i 's/^branding: debian/branding: rabbica/' /etc/calamares/settings.conf
+grep -q '^branding: rabbica' /etc/calamares/settings.conf \
+  || { echo "[rbc] Calamares 品牌替换失败"; exit 1; }
+
+# 桌面安装图标中文化 (calamares-install-debian.desktop 来自设置包)
+for f in /usr/share/applications/calamares-install-debian.desktop \
+         /etc/xdg/autostart/calamares-desktop-icon.desktop; do
+  [ -f "$f" ] && sed -i 's/^Name=.*/Name=安装 RabbicaOS/' "$f" || true
+done
+echo "[rbc] Calamares 品牌接线完成"
