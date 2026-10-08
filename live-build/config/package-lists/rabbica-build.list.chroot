@@ -88,3 +88,6 @@ qt6-declarative-private-dev
 qt6-quick3d-private-dev
 qt6-svg-private-dev
 qt6-wayland-private-dev
+# libpam0g-dev: Quickshell PAM 服务模块裸 include <security/_pam_types.h>
+#   (编译期才暴露, 本地全量编译实证; configure 不做检测)
+libpam0g-dev

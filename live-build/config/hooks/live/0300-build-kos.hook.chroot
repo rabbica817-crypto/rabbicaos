@@ -21,6 +21,15 @@
 #  - 本地实证: 2026-10-07 于 trixie chroot (debootstrap minbase + 构建清单全量)
 #    依次验证 ① Quickshell v0.3.0 configure (CRASH_HANDLER=OFF) ② NextKde 顶层
 #    configure (spatial=ON) ③ apps 四件套 configure, 全部 0 退出。
+# v3 修订 (CI Run5 复盘 + 本地全量编译实证 2026-10-08):
+#  - Quickshell 全量编译 (513/513) 通过, 前提: 构建清单补 libpam0g-dev
+#    (PAM 模块裸 include security/_pam_types.h) + background_effect 模块禁用
+#    (ext-background-effect-v1 协议需 wayland-protocols>=1.45, trixie 为 1.44;
+#    KOS 无 import 该 QML 模块, grep 实证) → 见步骤 5/9 补丁 B。
+#  - KOS_BUILD_KWIN_PLUGINS=OFF: 上游 KWin 插件为 6.4 API, trixie 6.3.6 断层
+#    (本地 -k 0 全量编译实证, 失败面: kos-bridge/dock-window-animation/
+#    context-menu-input/stageanim); 详见步骤 8/9 注释。
+#  - GOROOT: trixie go 二进制 trimmed, kosctl 的 Go 构建需显式 GOROOT → 步骤 8/9。
 #  - KOS_BUILD_SPATIAL=ON 依据: NextKde README "打包与 CI 用这个"; trixie 有
 #    libonnxruntime-dev 1.21.0 (apt-cache policy 实证), libopencv-dev 已在构建清单。
 #  - 其余依据沿用 v1: Quickshell 源 git.outfoxxed.me v0.3.0 (KOS README 要求
@@ -53,11 +62,11 @@ echo "[rbc] KOS 构建开始, 完整日志: $LOG"
 : > "$LOG"
 
 # ---- 1. 工具链自检: 缺失立即暴露, 不留到 cmake 中段才报错 ----
-step "1/8 工具链自检" sh -c 'git --version && cmake --version | head -n1 && ninja --version && go version && g++ --version | head -n1'
+step "1/9 工具链自检" sh -c 'git --version && cmake --version | head -n1 && ninja --version && go version && g++ --version | head -n1'
 
 # ---- 2. live 用户: live-config 启动时跳过已存在同名用户; 构建期预建以部署到家目录 ----
 # KWin 插件系统安装需要 root → 临时 NOPASSWD (9000-cleanup 钩子删除本文件, 不残留进 ISO)
-step "2/8 live 用户与临时 NOPASSWD" sh -c '
+step "2/9 live 用户与临时 NOPASSWD" sh -c '
   if ! getent passwd user >/dev/null; then
     useradd -m -s /bin/bash user
   fi
@@ -75,17 +84,26 @@ step "3/9 克隆 quickshell ${QS_TAG} (git.outfoxxed.me)" \
 step "4/9 克隆 NextKde (上游 main)" \
   su - user -c "git clone --depth 1 https://github.com/SuceV587/NextKde.git /opt/rabbica-build/NextKde"
 
-# ---- 4. 发行版补丁: surface-shape 的 GuiPrivate 兼容 trixie Qt 6.8 ----
-# 依据: Qt 6.9 才引入 find_package(Qt6 COMPONENTS FooPrivate) 机制 (qtbase commit
-# ad7b94e1, ChangeLog [CMake]; KDE kio-extras MR !424 同结论), 6.8 下必然失败;
-# 而 6.8 的 Qt6::GuiPrivate target 由加载 Qt6::Gui 副作用自动创建, 前提是私有头
-# 包 qt6-base-private-dev 在位 (本构建清单已含) —— 故移除组件名即可, 链接行
-# (target_link_libraries ... Qt6::GuiPrivate) 无需改动。全仓仅此一处显式
-# Private find_package (grep 实证)。上游按 Ubuntu 26.04 (Qt 6.9+) 验证, 属打包
-# 环境差异, 非上游 bug。
-step "5/9 surface-shape Qt6.8 兼容补丁" \
-  sed -i 's/COMPONENTS Core Gui GuiPrivate Qml Quick WaylandClient/COMPONENTS Core Gui Qml Quick WaylandClient/' \
-  /opt/rabbica-build/NextKde/shell/native/surface-shape/CMakeLists.txt
+# ---- 4. 发行版补丁: trixie 底座与上游验证环境 (Ubuntu 26.04 / Qt 6.9+) 的差异 ----
+# 补丁 A (GuiPrivate): Qt 6.9 才引入 find_package(Qt6 COMPONENTS FooPrivate) 机制
+#   (qtbase commit ad7b94e1, ChangeLog [CMake]; KDE kio-extras MR !424 同结论),
+#   6.8 下必然失败; 而 6.8 的 Qt6::GuiPrivate target 由加载 Qt6::Gui 副作用自动
+#   创建, 前提是私有头包 qt6-base-private-dev 在位 (本构建清单已含) —— 故移除
+#   组件名即可, 链接行 (target_link_libraries ... Qt6::GuiPrivate) 无需改动。
+#   全仓仅此一处显式 Private find_package (grep 实证)。上游按 Qt 6.9+ 验证,
+#   属打包环境差异, 非上游 bug。
+# 补丁 B (background_effect): Quickshell v0.3.0 无条件编译 ext-background-effect-v1
+#   协议绑定 (src/wayland/CMakeLists.txt: add_subdirectory(background_effect)),
+#   该协议 wayland-protocols 1.45 才收录, trixie 为 1.44 (dpkg 实证, staging 目录
+#   缺失) → ninja 报 "missing and no known rule"。KOS 全仓无
+#   import Quickshell.Wayland._BackgroundEffect (grep 实证; KOS 视觉由自带
+#   kwin/glass-effect 实现) → 删除该模块构建无损。
+step "5/9 trixie 兼容补丁 (GuiPrivate + background_effect)" \
+  sh -c 'sed -i "s/COMPONENTS Core Gui GuiPrivate Qml Quick WaylandClient/COMPONENTS Core Gui Qml Quick WaylandClient/" \
+    /opt/rabbica-build/NextKde/shell/native/surface-shape/CMakeLists.txt \
+  && sed -i -e "/^add_subdirectory(background_effect)$/d" \
+            -e "/^list(APPEND WAYLAND_MODULES Quickshell.Wayland._BackgroundEffect)$/d" \
+    /opt/rabbica-build/quickshell/src/wayland/CMakeLists.txt'
 
 # ---- 5. 编译安装 Quickshell (CRASH_HANDLER=OFF 依据见文件头) ----
 step "6/9 CMake configure quickshell" \
@@ -93,9 +111,24 @@ step "6/9 CMake configure quickshell" \
 step "7/9 编译+安装 quickshell 到 /usr/local" \
   su - user -c "cmake --build /opt/rabbica-build/quickshell/build -j\$(nproc) && sudo cmake --install /opt/rabbica-build/quickshell/build && sudo ldconfig"
 
-# ---- 6. 安装 KOS 完整版 (景深引擎 ON + 锁屏 + 四件套应用) ----
+# ---- 6. 安装 KOS (景深引擎 ON + 锁屏 + 四件套应用; KWin 插件层禁用) ----
+# KOS_BUILD_KWIN_PLUGINS=OFF 依据 (Run5 后本地全量编译实证):
+#  - 上游 KWin 插件按 KWin 6.4 API 编写 (KWin::Region / drawWindow(RenderTarget,
+#    RenderViewport,...) / a11ykeyboardmonitor.h), trixie kwin-dev 为 6.3.6, 四个
+#    C++ 插件 (kos-bridge/dock-window-animation/context-menu-input/stageanim)
+#    编译失败; 适配 6.3 需重写渲染回调, 偏离上游核心逻辑, 不做。
+#  - README 官方支持该开关 ("打包与 CI" 模式之一); kosctl 读取此环境变量
+#    (kosctl: Environment overrides 列表), 插件跳过构建与部署。
+#  - 无损项: kos-decoration 与 glass-effect 实测可在 6.3 编译, 但随插件层一并
+#    禁用; window-bridge.js 是 KWin scripting (JS, API 跨版本稳定), 仍随
+#    kosctl install 部署, 桌面接管核心链路保留。
+# GOROOT 显式设置依据: trixie 的 go 二进制为 trimmed 构建, 必须显式 GOROOT
+#   ("go binary is trimmed and GOROOT is not set", 本地实证), 动态推导安装前缀。
+# go.mod 要求的 toolchain (go 1.26) 由 GOTOOLCHAIN=auto 自动下载, runner 网络可达。
 step "8/9 kosctl install + lockscreen + apps" \
-  su - user -c "export SYSTEMD_OFFLINE=1 KOS_BUILD_SPATIAL=ON; cd /opt/rabbica-build/NextKde && ./tools/kosctl install && ./tools/kosctl install lockscreen && ./tools/kosctl install apps"
+  su - user -c "export SYSTEMD_OFFLINE=1 KOS_BUILD_SPATIAL=ON KOS_BUILD_KWIN_PLUGINS=OFF \
+    GOROOT=\$(dirname \$(dirname \$(readlink -f /usr/bin/go))); \
+    cd /opt/rabbica-build/NextKde && ./tools/kosctl install && ./tools/kosctl install lockscreen && ./tools/kosctl install apps"
 
 # ---- 7. 终验 ----
 step "9/9 终验 qs 可执行" sh -c 'command -v qs'
