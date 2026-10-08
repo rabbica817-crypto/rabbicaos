@@ -81,14 +81,17 @@ step "1/9 工具链自检" sh -c 'git --version && cmake --version | head -n1 &&
 # ---- 1b. ccache 接线 (分块缓存之一, 2026-10-08) ----
 # 背景: 沙箱侧已用 32 核预编译 Quickshell/NextKde 并把 ccache 上传 GitHub Release
 # (标签 kos-ccache-v1), CI 构建时下载该缓存 → 编译期秒级命中, 免去 4-7 分钟编译。
-# 要点:
-#  ① CCACHE_DIR 必须与沙箱一致 (/home/user/.ccache), 且编译以 user 身份 → chown;
-#  ② base_dir = /opt/rabbica-build + hash_dir=false: ccache 官方跨机器共享机制,
-#     使哈希基于源码相对路径 (两侧源码路径完全一致, 见下载步骤);
-#  ③ CMAKE_{C,CXX}_COMPILER_LAUNCHER = CMake 3.4+ 官方机制, CS/NextKde 均生效;
-#  ④ 未装 ccache 时静默跳过, 不阻塞构建 (本地/无缓存环境仍可跑)。
+# 【Run9 实证】即便包清单含 ccache, chroot 内仍探测不到 ("ccache 未安装, 跳过"),
+# 导致编译未走缓存、.ccache 为空、回拷仅 8K。为消除这一不确定性, 此处显式兜底安装
+# (apt 已在清单阶段更新过索引, 安装很快; 失败也不阻塞构建)。
+if ! command -v ccache >/dev/null 2>&1; then
+    log "ccache 未探测到, 尝试显式安装..."
+    apt-get install -y -qq ccache >>"$LOG" 2>&1 \
+        || log "  警告: ccache 安装失败, 编译将不走缓存"
+fi
+
 if command -v ccache >/dev/null 2>&1; then
-    log "ccache 已就绪, 编译将经缓存加速"
+    log "ccache 已就绪 ($(ccache --version | head -1))"
     mkdir -p /home/user/.ccache
     cat > /home/user/.ccache/ccache.conf <<'CCEOF'
 max_size = 3.0G
@@ -97,10 +100,10 @@ hash_dir = false
 sloppiness = include_file_ctime,include_file_mtime,time_macros
 compiler_check = content
 CCEOF
-    chown -R user:user /home/user/.ccache
+    chown -R user:user /home/user/.ccache 2>/dev/null || true
     log "ccache 配置: base_dir=/opt/rabbica-build hash_dir=false (跨机器共享)"
 else
-    log "ccache 未安装, 跳过 (不影响构建)"
+    log "ccache 不可用, 跳过 (不影响构建正确性)"
 fi
 
 # 编译路由包装: 若存在 ccache 则以 ccache 包裹 gcc/g++, 否则原样

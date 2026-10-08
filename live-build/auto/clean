@@ -1,13 +1,20 @@
 #!/bin/sh
 # 重置 live-build 构建目录 (Debian Live Manual: auto/clean 惯例)
 #
-# 【2026-10-08 修复 · 缓存失效根因】原实现无条件 `rm -rf .build/`, 而 CI 的
-# apt 包缓存正位于 .build/cache/ —— 于是 workflow 里 "restore 缓存 → clean
-# (删缓存) → build" 的顺序把刚恢复的缓存亲手删掉, 缓存从未生效 (8 轮 CI
-# 每轮重下 1900+ 包 ~45min 的直接原因)。且 `lb clean --purge` 亦会清包缓存。
+# 【2026-10-08 修复 · 缓存失效根因】
+# 原实现: `lb clean noauto --purge` + 无条件 `rm -rf .build/`。
+#   - `lb clean --purge` 语义是 "removes everything, including all caches"
+#     (lb clean(1) 原文实证) → 把 apt 包缓存清掉;
+#   - 且原 rm 目标路径本身也是错的 (包缓存不在 .build/ 下)。
+# 这导致 workflow 的 "restore 缓存 → clean(清缓存) → build" 顺序永远达不到
+# "复用上次下载的包" 的效果 —— 是 8 轮 CI 每轮重下 1900+ 包 (~45min) 的直接原因。
 #
-# 现行为: 默认保留 .build/cache/; 仅当显式传 --purge-cache 时才清缓存
-# (留给"需要彻底重建"的场景)。其余目录照常清理, 保证构建干净。
+# 【正确路径】live-build 的包缓存位于 **cache/packages** 与 **cache/apt**
+# (由 config/common 的 LB_CACHE_PACKAGES="true" 控制; 在 /usr/lib/live/build
+#  中 grep 实证 "cache/packages" 字样), 相对于 lb 工作目录, 不是 .build/。
+#
+# 现行为: 默认保留 cache/; `lb clean noauto` 不带 --purge (官方 --all 语义已
+# 注明 "The cache directory is kept")。仅显式传 --purge-cache 时才连缓存一起清。
 PURGE_CACHE=0
 CLEAN_ARGS=""
 for arg in "$@"; do
@@ -23,13 +30,13 @@ lb clean noauto $CLEAN_ARGS
 rm -f config/package-lists/*.list.chroot.bak 2>/dev/null || true
 
 if [ "$PURGE_CACHE" = "1" ]; then
-    echo "[clean] --purge-cache: 清除 .build/cache (apt 包缓存)"
-    rm -rf chroot/ binary/ local/ .build/ 2>/dev/null || true
+    echo "[clean] --purge-cache: 清除 cache/ (apt 包缓存)"
+    rm -rf chroot/ binary/ local/ cache/ .build/ 2>/dev/null || true
 else
-    # 保留 .build/cache; 其余构建产物清掉
-    if [ -d .build/cache ]; then
-        echo "[clean] 保留 apt 包缓存: $(du -sh .build/cache 2>/dev/null | cut -f1)"
+    if [ -d cache ]; then
+        echo "[clean] 保留 apt 包缓存 cache/: $(du -sh cache 2>/dev/null | cut -f1)"
     fi
     rm -rf chroot/ binary/ local/ 2>/dev/null || true
-    find .build -mindepth 1 -maxdepth 1 ! -name cache -exec rm -rf {} + 2>/dev/null || true
+    # .build/ 下保留 config (lb config 的产物), 其余清掉
+    find .build -mindepth 1 -maxdepth 1 ! -name config -exec rm -rf {} + 2>/dev/null || true
 fi

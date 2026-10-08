@@ -83,7 +83,7 @@ jobs:
         id: cache-apt
         uses: actions/cache@v4
         with:
-          path: live-build/.build/cache
+          path: live-build/cache
           key: lb-apt-v2-${{ hashFiles('live-build/config/**') }}
           restore-keys: |
             lb-apt-v2-
@@ -105,7 +105,7 @@ jobs:
           echo "apt cache hit:    ${{ steps.cache-apt.outputs.cache-hit }}"
           echo "actions ccache:   ${{ steps.cache-ccache.outputs.cache-hit }}"
           du -sh ~/.ccache 2>/dev/null || echo "ccache: 空 (首次)"
-          du -sh live-build/.build/cache 2>/dev/null || echo "apt cache: 空 (首次)"
+          du -sh live-build/cache 2>/dev/null || echo "apt cache: 空 (首次)"
           grep -E "base_dir|hash_dir" ~/.ccache/ccache.conf 2>/dev/null || echo "(ccache.conf 待 hook 生成)"
 
       # ccache 需在 chroot 内可见: live-build 的 chroot 从 config/includes.chroot 取文件。
@@ -159,7 +159,7 @@ jobs:
         if: always() && steps.cache-apt.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: live-build/.build/cache
+          path: live-build/cache
           key: lb-apt-v2-${{ hashFiles('live-build/config/**') }}-${{ github.run_id }}
 
       - name: Save ccache (always)
