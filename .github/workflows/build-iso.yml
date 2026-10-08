@@ -39,7 +39,9 @@ jobs:
       - name: Install live-build (Debian trixie official)
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq cpio debootstrap xorriso wget
+          # debian-archive-keyring: 【实证教训】runner 无 Debian 签名钥匙环,
+          # debootstrap 校验 Debian Release 签名失败直接中止
+          sudo apt-get install -y -qq cpio debootstrap xorriso wget debian-archive-keyring
           wget -q https://deb.debian.org/debian/pool/main/l/live-build/live-build_20250505+deb13u1_all.deb
           sudo dpkg -i live-build_*.deb
           test "$(lb --version)" = "20250505+deb13u1" && echo "live-build 版本正确 ✓"
