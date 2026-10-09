@@ -2,6 +2,8 @@
 
 > 类 macOS 开箱即用的 Linux 发行版 · 基于 **Debian 13 (trixie) + KDE Plasma 6 + KOS Desktop Shell**
 > 内置微信 / QQ / 钉钉 / WPS 官方原生版 · x86_64
+>
+> **当前版本：`rbc-v1.0`** · [下载 ISO](https://github.com/rabbica817-crypto/rabbicaos/releases/latest)
 
 ## 项目结构
 
@@ -95,6 +97,26 @@ sudo ./build.sh iso
 | 瘦身 | 源码/构建目录/临时 sudoers 构建后清除 | 9000-cleanup 钩子，日志归档至 /usr/share/doc/rabbicaos |
 
 > ⚠️ 首次 `lb build` 约需 1-2 小时（含 Quickshell+KOS 编译），属正常现象；构建日志在 ISO 内 `/usr/share/doc/rabbicaos/build.log` 可查。
+
+## 下载与校验
+
+**最新版**： [Releases 页面](https://github.com/rabbica817-crypto/rabbicaos/releases/latest)
+
+```bash
+# 1. 下载（推荐 gh，比网页 artifact 快且无 14 天过期限制）
+gh release download rbc-v1.0 -R rabbica817-crypto/rabbicaos
+
+# 2. 校验完整性
+sha256sum -c RabbicaOS-1.0-amd64.sha256
+
+# 3. 写入 U 盘（ISO 为 hybrid 格式，可直接 dd 启动）
+sudo dd if=RabbicaOS-1.0-amd64-*.iso of=/dev/sdX bs=4M status=progress oflag=sync
+```
+
+> **校验和（rbc-v1.0）**
+> `9618909408a2250942f89aa16cb01a71e8ef1c650c159ced3c6bd3e153293b6c`  `RabbicaOS-1.0-amd64-20261009.iso`
+>
+> 也可用 Ventoy / balenaEtcher 图形化写入。启动后进入 live 桌面，桌面上的 **Install** 图标启动 Calamares 安装器。
 
 ## 路线 C：GitHub Actions 云端构建（无需本地设备）
 
