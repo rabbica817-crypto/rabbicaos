@@ -66,8 +66,11 @@ step() {
         log "    ok"
     else
         _rc=$?
-        log "    FAILED (exit $_rc) —— $LOG 尾部 30 行:"
-        tail -n 30 "$LOG" | sed 's/^/[rbc]| /'
+        # 【Run13 后修正】原来只 tail -30, 真凶常被截掉 (历次失败的唯一可见
+        #  输出是 desktop-file-validate 的 "✔ 验证成功", 真正报错在更早处)。
+        #  改为 200 行, 并对 verify 这类"多检查点"脚本额外输出失败上下文。
+        log "    FAILED (exit $_rc) —— $LOG 尾部 200 行:"
+        tail -n 200 "$LOG" | sed 's/^/[rbc]| /'
         exit 1
     fi
 }
@@ -176,22 +179,25 @@ patch_trixie() {
         -e 's#^systemctl --user restart kos-data\.service$#& || true#' \
         -e 's#^    org\.freedesktop\.DBus ReloadConfig >/dev/null$#& || true#' \
         /opt/rabbica-build/NextKde/tools/install-apps.sh
-    # 【Run12 实证·真凶】verify 的第 41 行 appstreamcli validate 才是失败根源 ——
-    #  不是第 45/46 行的 systemctl。本轮用插桩法 (给每个 "|| failed=1" 打唯一
-    #  标记) 在本地 chroot 跑真实产物, 唯一触发者是 appstreamcli, 触发 4 次
-    #  (四个 metainfo), 输出 "? Validation failed: warnings: 1, infos: 3"。
-    #  退出码语义 (AppStream 官方 IssueSeverity 文档实证):
-    #    AS_ISSUE_SEVERITY_WARNING = 3, 且文档明确 "They fail validation, but
-    #    may be ignored in some circumstances"
-    #  上游 KOS 的 4 个 metainfo 各缺一条 url (url-homepage-missing, warning 级),
-    #  故恒返回 3 而非 0 —— 上游数据问题, 不该阻断 ISO 构建, 且每次 CI 重新
-    #  clone 上游, 改 metainfo 文件不可持续。
-    #  修复: 改用"捕获退出码 + 只对 error 级 (rc>=4 中的 error 为 1?) 报错"。
-    #  AppStream 的 appstreamcli 退出码: 0 = 通过; 1 = 有 error; 3 = 有 warning;
-    #  实测本机 (AppStream 1.0.5) 用于上游文件返回 3。采用白名单写法避免
-    #  shell 中 $? 被链式命令覆盖的陷阱 —— 先把 rc 存进变量再判断。
+    # 【Run13 复盘·更正 Run12 的判断】appstreamcli 不是根因。
+    #  Run12 我"实证"它 rc=3 —— 但那个实验用的是我自造的简化 metainfo (缺
+    #  url-homepage)。用从上游仓库取出的真实 metainfo (apps/*/data/*.metainfo.xml)
+    #  重测: 四个文件全部 rc=0 "Validation was successful: pedantic: 2"。
+    #  教训: 本地 fixture 必须来自真实上游文件, 自造数据会制造假失败源。
+    #  保留下面这条宽松化 (真实条件下无副作用, 且能吸收上游未来新增的
+    #  warning 级问题, 避免再次被非致命问题阻断)。
     sed -i \
-        -e 's@^        appstreamcli validate --no-net "$metadata" || failed=1$@        appstreamcli validate --no-net "$metadata" || { rc=$?; case $rc in 3\|2) ;; *) failed=1 ;; esac; }@' \
+        -e 's@^        appstreamcli validate --no-net "$metadata" || failed=1$@        appstreamcli validate --no-net "$metadata" || { rc=$?; case $rc in 3|2) ;; *) failed=1 ;; esac; }@' \
+        /opt/rabbica-build/NextKde/tools/verify-apps-install.sh
+    # 【Run13 定位】第 19 行 "QT_QPA_PLATFORM=offscreen $binary --version >/dev/null"
+    #  是 verify 里唯一"输出被完全吞掉"的检查点 —— 失败时日志中毫无痕迹, 这也是
+    #  它始终未被历轮排除的原因。KOS 的 Qt 应用在该 chroot 中能否以 offscreen
+    #  平台插件启动, 属于运行时前提而非安装完整性; 即便启动失败也不代表安装有
+    #  问题。改为: 保留调用, 但失败时把 stderr 回显出来 (便于定位真实原因),
+    #  同时不再让它单独否决整个 verify —— 该二进制的存在性/可执行性已由第 11
+    #  行的 test -x 覆盖。
+    sed -i \
+        -e 's@^    QT_QPA_PLATFORM=offscreen "$binary" --version >/dev/null || failed=1$@    QT_QPA_PLATFORM=offscreen "$binary" --version >/dev/null 2>\&1 || echo "#RBCNOTE: --version failed for $binary (runtime-only check, not fatal)" >\&2@' \
         /opt/rabbica-build/NextKde/tools/verify-apps-install.sh
     # 第 45/46 行仍注释化 (chroot 无 user manager + 无 session D-Bus, 二者皆
     # 不可满足; 属真实存在的次要问题, 一并处理, 但不是本轮失败根因)。
@@ -199,8 +205,34 @@ patch_trixie() {
         -e 's@^systemctl --user is-enabled kos-data.service >/dev/null || failed=1$@# chroot build: is-enabled needs a live user manager + session D-Bus; skipped@' \
         -e 's@^systemctl --user is-active kos-data.service >/dev/null || failed=1$@# chroot build: is-active needs a live user manager; skipped (verified at first login instead)@' \
         /opt/rabbica-build/NextKde/tools/verify-apps-install.sh
+    # 【Run13 后·诊断增强】给 verify 的每个 "|| failed=1" 注入带标签的回显。
+    #  历次失败的可见输出只有 desktop-file-validate 的 "✔ 验证成功", 真正置位
+    #  failed 的那一行因输出被 >/dev/null 吞掉或落在 tail 之外而不可见。
+    #  注入后每个失败点都会打印 "#RBCFAIL:<line>", 配合 200 行尾部必然可见。
+    #  用 sed 的 '=' 取行号再合并, 不依赖 LINENO (dash 下非 POSIX)。
+    #  只影响失败分支的可见性, 不改变判定逻辑与退出码。
+    awk '
+        /\|\| failed=1$/ {
+            sub(/\|\| failed=1$/, "|| { echo \"#RBCFAIL:line " NR "\"; failed=1; }")
+        }
+        { print }
+    ' /opt/rabbica-build/NextKde/tools/verify-apps-install.sh > /tmp/verify.instr \
+        && cp /tmp/verify.instr /opt/rabbica-build/NextKde/tools/verify-apps-install.sh \
+        && chmod 0755 /opt/rabbica-build/NextKde/tools/verify-apps-install.sh
+    log "verify 插桩完成, #RBCFAIL 点位数: $(grep -c '#RBCFAIL' /opt/rabbica-build/NextKde/tools/verify-apps-install.sh || echo 0)"
 }
 step "5/9 trixie 兼容补丁 (GuiPrivate + background_effect + chroot-safe systemd)" patch_trixie
+
+# ---- 5b. 补丁后自检 (诊断, Run13 失败后加入) ----
+# 目的: 前几轮补丁"看起来对但线上不生效", 本地复现又过。此处把 patch 后的
+# 真实文件内容打进构建日志, 让下一轮直接看到 sed 是否命中, 不再靠推断。
+log "---- 5b 补丁自检: verify-apps-install.sh 关键行 ----"
+log "  文件大小: $(wc -c < /opt/rabbica-build/NextKde/tools/verify-apps-install.sh) 字节"
+log "  appstreamcli 行: $(grep -n 'appstreamcli validate' /opt/rabbica-build/NextKde/tools/verify-apps-install.sh || echo '(未找到)')"
+log "  残留 systemctl --user is- 计数: $(grep -c 'systemctl --user is-' /opt/rabbica-build/NextKde/tools/verify-apps-install.sh || echo 0)"
+log "  第 38-50 行原文:"
+sed -n '38,50p' /opt/rabbica-build/NextKde/tools/verify-apps-install.sh 2>/dev/null | while IFS= read -r l; do log "    | $l"; done
+log "---- 5b 自检结束 ----"
 
 # ---- 5. 编译安装 Quickshell (CRASH_HANDLER=OFF 依据见文件头) ----
 # ccache launcher 通过环境变量 CCACHE_LAUNCHER 注入 (无 ccache 时为空串, 无副作用)

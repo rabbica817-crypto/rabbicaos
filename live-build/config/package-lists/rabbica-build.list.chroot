@@ -94,3 +94,13 @@ libpam0g-dev
 # ccache: 编译缓存 (分块缓存之一, 2026-10-08)。CI 侧 ~/.ccache 由 actions/cache
 #   持久化, hook 以 CMAKE_*_COMPILER_LAUNCHER 路由; 二次构建省 50-70% 编译时间。
 ccache
+
+# ---- verify-apps-install.sh 的工具依赖 (Run13 后加入) ----
+# 依据 verify-apps-install.sh 的 command -v 守卫:
+#   第 16 行 desktop-file-validate (包 desktop-file-utils)
+#   第 40 行 appstreamcli        (包 appstream)
+# 二者此前不在清单内, 是否可用取决于 KDE/Qt 依赖链的偶然传递 —— 这正是历次
+# verify "本地通过、CI 失败" 环境差异的来源之一。显式声明以消除不确定性:
+# 可用时检查会真正执行, 不可用时被 command -v 跳过, 两种都确定。
+desktop-file-utils
+appstream
