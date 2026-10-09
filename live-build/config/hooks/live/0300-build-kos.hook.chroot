@@ -55,6 +55,27 @@ set -e
 BUILD=/opt/rabbica-build
 LOG=/var/log/rabbica-kos-build.log
 QS_TAG=v0.3.0
+# 【上游版本锁定 v5, 2026-10-09】NextKde 固定到 e5304da (2026-10-09 04:27:43Z)。
+#  原因: 上游 main 在 07:13-08:31 UTC 连续合入 6 个提交 (PR #166/#164), 引入
+#  破坏性变更, 导致 Run15 失败 (Run14 于 06:11 成功, 仅 1 小时之差):
+#    1. tools/install-apps.sh:54 由 "enable kos-data.service" 改回
+#       "enable --now kos-data.service" —— 本 hook 步骤 5/9 的 chroot-safe 补丁
+#       按旧文本精确匹配, 全部失配; 脚本头是 set -eu, 无 user manager 的 chroot
+#       里该行必败 → 脚本在 verify 之前就死掉 (故 #RBCFAIL 插桩一个都没触发)。
+#    2. tools/verify-apps-install.sh 2195B → 2954B, "|| failed=1" 点 3 → 7 个,
+#       新增 listenfree 检查 / kos-music 退休检查 / settings import 目标检查。
+#    3. 音乐应用 kos-music 被 ListenFree 取代, 而 listenfree 构建链要求
+#       Qt6Core >= 6.10 (tools/check-apps-dependencies.py:24 实证), trixie 只有
+#       6.8.2 —— 版本鸿沟, 当前基线不可能满足。
+#  锁定 e5304da 的可复现性实证: 该 ref 下 verify-apps-install.sh 2195B、
+#  md5 3a10a1c10c9659a16f050ad79891d234, 与 Run14 构建时所用文件逐字节一致;
+#  install-apps.sh 3789B (Run14 同版本)。
+#  待办 (方案 B): 适配新版需① 补 enable --now 的 chroot-safe 补丁 ② 包清单加
+#  Qt6WebEngine/libav*/libsecret/icu/quickjs+qmmp 构建依赖 ③ 解决 Qt6Core>=6.10
+#  门槛 (或向上游反馈 trixie 6.8 支持)。届时删除此锁定即可。
+#  【实测】必须用完整 SHA: 短 SHA 会被 uploadpack 拒绝
+#  ("fatal: couldn't find remote ref e5304da"); 完整 SHA fetch 正常 (rc=0)。
+NEXTKDE_REF=e5304daa0a0162527b7507935ebeccd647d18e39
 
 log() { echo "[rbc] $*"; }
 
@@ -139,8 +160,13 @@ step "2/9 live 用户与临时 NOPASSWD" sh -c '
 # ---- 3. 克隆源码 ----
 step "3/9 克隆 quickshell ${QS_TAG} (git.outfoxxed.me)" \
   su - user -c "git clone --depth 1 --branch ${QS_TAG} https://git.outfoxxed.me/quickshell/quickshell.git /opt/rabbica-build/quickshell"
-step "4/9 克隆 NextKde (上游 main)" \
-  su - user -c "git clone --depth 1 https://github.com/SuceV587/NextKde.git /opt/rabbica-build/NextKde"
+step "4/9 克隆 NextKde (锁定 ${NEXTKDE_REF})" \
+  sh -c "git init -q ${BUILD}/NextKde && cd ${BUILD}/NextKde && \
+         git remote add origin https://github.com/SuceV587/NextKde.git && \
+         git fetch -q --depth 1 origin ${NEXTKDE_REF} && \
+         git checkout -q FETCH_HEAD && \
+         chown -R user:user ${BUILD}/NextKde && \
+         echo \"NextKde @ \$(git rev-parse HEAD)\""
 
 # ---- 4. 发行版补丁: trixie 底座与上游验证环境 (Ubuntu 26.04 / Qt 6.9+) 的差异 ----
 # 补丁 A (GuiPrivate): Qt 6.9 才引入 find_package(Qt6 COMPONENTS FooPrivate) 机制
