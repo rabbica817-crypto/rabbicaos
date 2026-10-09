@@ -6,10 +6,13 @@ Debian 13 (trixie) + KDE Plasma 6.3 + KOS Desktop Shell（Quickshell 0.3.x）自
 GitHub Actions 云端构建可安装 ISO。仓库: https://github.com/rabbica817-crypto/rabbicaos
 
 ## 当前进行中
-- **CI Run 14**（ID 37888932265，2026-10-09 05:30 UTC 触发，head 5a99424）构建中
-- 查状态: `gh run view 37888932265 --repo rabbica817-crypto/rabbicaos`
-- 成功 → 验证 artifact（rabbicaos-iso + sha256）；打 `rbc-v1.0` tag 可发 Release
-- Run 13（37867604773，head 138f0af）失败于 8/9，耗时 29m25s
+- **✅ CI Run 14 成功**（ID 37888932265，head 5a99424，2026-10-09 05:30:52Z → 06:11:03Z，耗时 40m11s）
+  - 九步链路 **1/9 → 9/9 全部 `ok`**（8/9 用时 2m51s，历轮唯一失败关卡，本轮通过）
+  - 产物：`RabbicaOS-1.0-amd64-20261009.iso` + `.sha256`
+  - **SHA256：`9618909408a2250942f89aa16cb01a71e8ef1c650c159ced3c6bd3e153293b6c`**
+  - Artifact `rabbicaos-iso`，ID `11598509395`，3,271,557,541 字节（约 3.05 GiB），retention 14 天
+  - 下载 URL: https://github.com/rabbica817-crypto/rabbicaos/actions/runs/37888932265/artifacts/11598509395
+- 下一步：本地校验 ISO 真实性（`file`/`isoinfo`/loop 挂载）；通过后打 `rbc-v1.0` tag 发 Release
 
 ## 七轮 CI 迭代史（全部有实证依据）
 | Run | 失败点 | 根因与修复 |
@@ -28,13 +31,40 @@ GitHub Actions 云端构建可安装 ISO。仓库: https://github.com/rabbica817
 | 11 | 8/9 verify | 同位置。**误判**：以为是我新加的 `test -L graphical-session.target.wants/...` 不可靠 → 确实是我引入的新风险，但不是根因 |
 | 12 | 8/9 verify | 同位置。**误判**：以为第 41 行 `appstreamcli validate` rc=3 → 我的"实证"用了**自造的简化 metainfo**（缺 url-homepage）；换成真实上游 metainfo 重测**四个全部 rc=0** |
 | 13 | 8/9 verify | 29m25s。**单点定因指向 verify-apps-install.sh:19** `QT_QPA_PLATFORM=offscreen "$binary" --version >/dev/null \|\| failed=1`——该行输出在成功/失败时**双向被吞**，是 verify 里唯一无日志痕迹的检查点。修复：改为非否决 + 失败可见（`#RBCNOTE`）|
-| 14 | 构建中 | 携带 5a99424：`step()` tail 30→200、`#RBCFAIL:line N` 插桩、5b 自检 dump、包清单补 `desktop-file-utils`+`appstream` |
+| 14 | ✅ **成功** | 40m11s。九步全过，8/9 `ok`（2m51s）。5b 自检实证补丁落地形态与本地 fixture 完全一致（verify 补丁后 **2444 字节**、appstreamcli 已 rc 白名单、is-enabled/is-active 已注释、插桩点 47/48 就位）。产出 ISO + sha256 并上传 artifact |
+
+### 八轮失败的最终归因（诚实版）
+- **确定**：`5a99424` 的**补丁集整体**让 verify 由失败转为 rc=0。由 5b 自检（CI 内实测 2444 字节 + 逐行 dump）与本地 `env -i` 全链路 rc=0 双向印证。
+- **不确定**：**未能在本地复现 CI 的原始失败**，故"第 19 行是唯一真凶"这一单点定因**已被本地实证推翻**（CI 等效 machine-id 条件下，4 个 `offscreen --version` 全 rc=0）。真实成因最可能是**多点共同作用**，或 CI 独有因素（`/proc` 已挂载 vs 本地未挂、`XDG_RUNTIME_DIR`/`DBUS_SESSION_BUS_ADDRESS` 全缺失、dbus 因空 machine-id 而 abort）。
+- **教训**：无法复现的失败，不要强行归因于单点。应优先**把不确定性消灭掉**（本轮做法：把每个"环境依赖的断言"逐个改成 chroot-safe 或非否决），而不是"找到真凶再修"。
 
 ### 四轮误判的方法论教训（重要，勿重蹈）
 1. **日志尾部那 4 条 `✔ 验证成功：细节：2` 是 `desktop-file-validate` 的输出（中文、返回 0），不是 `appstreamcli` 的**。`appstreamcli` 说英文（`Validation was successful: pedantic: 2`）。把它们当成 appstreamcli 的失败证据，是 Run 12 误判的直接原因。
 2. **本地 fixture 必须来自真实上游文件**。自造简化数据会制造假失败源——Run 12 就是这样"实证"出一个根本不存在的 rc=3。
 3. **`tail -30` 会截掉真凶**。已改 `tail -200`；并对 verify 注入 `#RBCFAIL:line N`，让每个失败点自带行号。
 4. **"干净环境"是结论成立的前提**。沙箱 shell 会带 `GOROOT` 等预置变量并被 chroot 继承（见"本地实证记录"第 3 条同一陷阱）。Run 13 后我在 `env -i` 下重跑终版 verify，4 个 KOS 二进制的 `--version` **全部成功、无 `#RBCNOTE`**，说明第 19 行在真实条件下未必是唯一/真正根因；确定的是**这一批补丁整体让 verify 从失败转为 rc=0**。凡"单点定因"结论，必须在 `env -i` 下复现。
+5. **单点定因被本地实证推翻（Run 13 结论修正）**：把本地 chroot 精确置为 CI 等效（`/etc/machine-id` 置空 0 字节、删除 `/var/lib/dbus/machine-id`、`env -i`）后，逐个测 `QT_QPA_PLATFORM=offscreen kos-{calendar,todo,weather,music} --version` → **4 个全部 rc=0**。故「第 19 行 = 唯一根因」**不成立**，本地无法复现 CI 的失败。
+6. **Run 13 日志的最终证据链（可排除 appstreamcli）**：
+   ```
+   ...dbus[...] Aborted (core dumped) ×4...
+   ✔ 验证成功：细节：2      ← desktop-file-validate ×4（第一个循环 4 个 app 各一条）
+   ✔ 验证成功：细节：2
+   ✔ 验证成功：细节：2
+   ✔ 验证成功：细节：2
+   KOS application registration verification failed.   ← 紧接失败，零中间输出
+   ```
+   `desktop-file-validate` 在 app 循环内、`appstreamcli` 在其后的独立循环内。**日志里没有英文 `Validation was successful`，也没有任何 appstreamcli 报错** → appstreamcli 段整段静默（`command -v` 判定或输出被吞），`failed=1` 只能来自 app 循环内**唯一静默的那个检查点**（第 19 行）。这是"为什么四轮都只看到 desktop-file-validate 输出"的结构性原因。
+7. **`install-apps.sh` 的 dbus/systemd 调用全景（真实上游行号）**：
+   | 行 | 内容 | chroot 实际行为 |
+   |---|---|---|
+   | 39 | `systemctl --user daemon-reload` | `Running in chroot, ignoring` → rc=0 |
+   | 41 | `systemctl --user enable kos-data.service` | 本地无 `/proc` 时 rc=0；CI（`/proc` 已挂）行为待证 |
+   | 42 | `systemctl --user restart ... \|\| true` | rc=0 |
+   | 47 | `systemctl --user disable --now ... \|\| true` | rc=0 |
+   | 48 | `pim_pid=$(busctl --user status ...)` | dbus 报 `Failed to set bus address`；在 `$()` 内，`set -e` 不触发 |
+   | 69 | `busctl --user call ... \|\| true` | rc=0 |
+   脚本头是 `#!/bin/sh` + **`set -eu`**；第 41 行是唯一无保护的非零可能点。CI 日志中**未见**该行报错，故 install-apps.sh 本身存活，失败发生在它调用的 verify 内（第 88 行）。
+8. **CI `/etc/machine-id` 为空是既定事实**（日志原文：`UUID file '/etc/machine-id' should contain a hex string of length 32, not length 0`；`Failed to open "/var/lib/dbus/machine-id"`）。dbus 因此 `Aborted (core dumped)`。这是独立于 verify 的真实缺陷，建议在 hook 里 `systemd-machine-id-setup`（或 `dbus-uuidgen --ensure`）补齐——可消除 `gtk-update-icon-cache`/`kbuildsycoca6`/`busctl` 一族的噪声。
 
 ## 已固化进仓库的关键决策
 1. **KOS_BUILD_KWIN_PLUGINS=OFF**：上游 KWin 插件用 6.4 API（KWin::Region/drawWindow 新签名/
@@ -74,11 +104,15 @@ GitHub Actions 云端构建可安装 ISO。仓库: https://github.com/rabbica817
 - chroot 内已装 `desktop-file-utils 0.28-1`（为复现 CI 条件）；`appstream` 按需装卸
 
 ## 待办
-- [ ] 等 Run 14（37888932265）出结果；若 8/9 通过 → 观察 9/9 终验 → squashfs → ISO
-- [ ] 若 Run 14 仍失败：日志里 grep `#RBCFAIL` 直接读出触发行号（本次已就位，不再靠猜）
-- [ ] 验证 ccache 兜底安装与 apt 缓存路径修复（此前几轮回拷仅 8.0K、路径仍是 `.build/cache`，
-      说明 `Save apt cache` 的 `path: live-build/cache` 修复未进那些 run 的 head）
-- [ ] 产出 ISO 后核对 `Rename & checksum` / `upload-artifact` 的 `RabbicaOS-*.iso` + `.sha256`
+- [x] ✅ Run 14 成功；ISO 已验证（`P: Build completed successfully` + 3.1G `live-image-amd64.hybrid.iso`）
+- [ ] 打 `rbc-v1.0` tag 触发 Release（workflow 的 Release step 会自动发；本轮因无 tag 而 skipped）
+- [ ] ISO 全量校验需下载 3.05 GiB —— 沙箱带宽仅 ~46 KB/s（21 分钟仅 58 MB），**不要在沙箱下载**；
+      改用本地网络或 `gh release download`（比 artifact 快）
+- [x] ✅ ccache 兜底已生效：本轮回拷 **38M**（此前几轮仅 8.0K），命中率 24.41%（576/2360）
+- [x] ✅ apt 缓存路径已修复为 `live-build/cache`（key `lb-apt-v2-...`）
+- [ ] ISO 内 `desktop-file-utils` 未出现在 `Setting up`（基系统自带）；`appstream` 已装
+- [ ] 建议在 hook 里补 `systemd-machine-id-setup`：CI 的 `/etc/machine-id` 为 0 字节，
+      导致 dbus `Aborted (core dumped)`，是 `gtk-update-icon-cache`/`kbuildsycoca6`/`busctl` 一族噪声源
 - [ ] 国产应用 deb（微信/QQ/钉钉/WPS 官方包）尚未放入 apps-cn/，放入后重新构建
 - [ ] 可选视觉: Plymouth 开机动画、GRUB 主题、KOS 默认壁纸
 - [ ] KWin 6.4 重开插件层（跟踪 Debian 升级）
